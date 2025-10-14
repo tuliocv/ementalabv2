@@ -47,8 +47,8 @@ def run_redundancy(df, scope_key):
     # 🔢 Cálculo da matriz de similaridade
     # -----------------------------------------------------------
     with st.spinner("🧠 Calculando embeddings e matriz de similaridade SBERT..."):
-    emb = l2_normalize(sbert_embed(textos))
-    S = np.dot(emb, emb.T)
+        emb = l2_normalize(sbert_embed(textos))
+        S = np.dot(emb, emb.T)
 
     # -----------------------------------------------------------
     # 📈 Visualização da matriz
