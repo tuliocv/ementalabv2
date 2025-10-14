@@ -1,313 +1,342 @@
 # ===============================================================
-# 📈 EmentaLabv2 — Clusterização (Ementas) + Nomeação via GPT
-# Versão: v9.6.0 (com gráfico comparativo pós-GPT)
+# 📈 EmentaLabv2 — Clusterização (Ementa) c/ UC_ID, Nome GPT e Comparação
 # ===============================================================
-
-import streamlit as st
-import pandas as pd
+import json
+import re
 import numpy as np
+import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
-from sklearn.feature_extraction.text import CountVectorizer, ENGLISH_STOP_WORDS
-from openai import OpenAI
+import streamlit as st
 
+from sklearn.cluster import KMeans
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_distances
+
+# Utils do projeto
 from utils.embeddings import l2_normalize, sbert_embed
 from utils.exportkit import export_table, show_and_export_fig, export_zip_button
 from utils.text_utils import find_col, replace_semicolons
 
-# ---------------------------------------------------------------
-# 🧩 Função auxiliar de stopwords seguras
-# ---------------------------------------------------------------
-def build_stopwords():
-    """Gera lista segura e compatível de stopwords PT+EN"""
-    base = list(ENGLISH_STOP_WORDS)
-    extra_pt = [
-        "de", "da", "do", "das", "dos", "para", "por", "com", "a", "o", "e", "em",
-        "como", "ao", "na", "no", "nas", "nos", "sobre", "entre", "pelas", "pelos",
-        "pelo", "pela", "ser", "estar", "ter", "se", "que", "onde", "quando", "uma",
-        "um", "as", "os", "é", "à", "às", "ao", "aos", "já", "também", "ou", "sem",
-        "mesmo", "cada", "todo", "toda", "todas", "todos", "nesta", "neste", "nesse",
-        "nessa", "essas", "esses", "esse", "essa"
-    ]
-    merged = set(str(w).strip().lower() for w in (base + extra_pt)
-                 if isinstance(w, str) and w.strip())
-    return sorted(list(merged))
+# -------------- Helpers -----------------
 
-# ---------------------------------------------------------------
-# 🚀 Função principal de execução
-# ---------------------------------------------------------------
-def run_cluster(df, scope_key):
-    # -----------------------------------------------------------
-    # 🏷️ Título e descrição
-    # -----------------------------------------------------------
-    st.markdown(
-        "<h2 style='color:#2ca02c;'>📈 Clusterização de Ementas</h2>",
-        unsafe_allow_html=True
-    )
-    st.caption(
-        """
-        Esta análise agrupa as **Ementas das Unidades Curriculares (UCs)** com base em similaridade semântica.
-        Utiliza **embeddings SBERT** e o algoritmo **K-Means** para revelar **núcleos temáticos** e
-        **áreas de convergência curricular**.
-        """
+def _clean_corpus(textos: list[str]) -> list[str]:
+    """Limpa e padroniza os textos para TF-IDF (sem parâmetros inválidos)."""
+    out = []
+    for t in textos:
+        s = str(t)
+        s = re.sub(r"[\r\n\t]+", " ", s)      # quebras
+        s = re.sub(r"\s{2,}", " ", s).strip() # espaços
+        out.append(s)
+    return out
+
+def _tfidf_top_keywords_per_cluster(textos: list[str], labels: np.ndarray, top_k: int = 8) -> pd.DataFrame:
+    """
+    Retorna um DataFrame com palavras-chave TF-IDF por cluster.
+    Usa parâmetros compatíveis com sklearn 1.4+ (evita InvalidParameterError).
+    """
+    if len(textos) == 0:
+        return pd.DataFrame(columns=["Cluster", "Palavras-chave"])
+
+    textos_clean = _clean_corpus(textos)
+
+    # Vectorizer enxuto e compatível
+    vectorizer = TfidfVectorizer(
+        lowercase=True,
+        analyzer="word",
+        ngram_range=(1, 2),
+        min_df=2,
+        max_df=0.95,
+        max_features=8000,
+        norm="l2"
     )
 
-    # -----------------------------------------------------------
-    # 📂 Seleção da coluna base
-    # -----------------------------------------------------------
+    X = vectorizer.fit_transform(textos_clean)
+    vocab = np.array(vectorizer.get_feature_names_out())
+
+    df_kw = []
+    k = int(labels.max()) + 1 if len(labels) else 0
+    for cid in range(k):
+        idx = np.where(labels == cid)[0]
+        if idx.size == 0:
+            df_kw.append({"Cluster": cid, "Palavras-chave": []})
+            continue
+        sub = X[idx].mean(axis=0)  # média TF-IDF do cluster
+        sub = np.asarray(sub).ravel()
+        if sub.sum() == 0:
+            df_kw.append({"Cluster": cid, "Palavras-chave": []})
+            continue
+        top_idx = np.argsort(-sub)[:top_k]
+        kws = [vocab[i] for i in top_idx]
+        df_kw.append({"Cluster": cid, "Palavras-chave": kws})
+
+    return pd.DataFrame(df_kw)
+
+def _representative_uc_by_centroid(embeddings: np.ndarray, labels: np.ndarray, nomes: list[str]) -> dict:
+    """
+    Para cada cluster, encontra a UC cujo embedding está mais próximo do centróide (menor distância).
+    Retorna {cluster_id: {"uc": Nome, "idx": índice}}.
+    """
+    reps = {}
+    k = int(labels.max()) + 1 if len(labels) else 0
+    for cid in range(k):
+        idxs = np.where(labels == cid)[0]
+        if idxs.size == 0:
+            reps[cid] = {"uc": f"Cluster {cid}", "idx": None}
+            continue
+        C = embeddings[idxs].mean(axis=0, keepdims=True)
+        d = cosine_distances(embeddings[idxs], C).ravel()
+        best_local = idxs[np.argmin(d)]
+        reps[cid] = {"uc": nomes[best_local], "idx": int(best_local)}
+    return reps
+
+def _project_2d(emb: np.ndarray) -> np.ndarray:
+    """Tenta UMAP → T-SNE → SVD, nessa ordem."""
+    try:
+        import umap
+        return umap.UMAP(n_neighbors=12, min_dist=0.1, random_state=42).fit_transform(emb)
+    except Exception:
+        try:
+            from sklearn.manifold import TSNE
+            perplex = max(2, min(30, emb.shape[0] // 3 if emb.shape[0] >= 6 else 2))
+            return TSNE(n_components=2, perplexity=perplex, random_state=42, init="random", learning_rate="auto").fit_transform(emb)
+        except Exception:
+            from sklearn.decomposition import TruncatedSVD
+            return TruncatedSVD(n_components=2, random_state=42).fit_transform(emb)
+
+def _plot_scatter(df_plot: pd.DataFrame, title: str, label_col: str, scope_key: str, base_name: str):
+    """Desenha scatter 2D com rótulos UC_ID e legenda por rótulos de cluster."""
+    fig, ax = plt.subplots(figsize=(9.5, 6.5))
+    labels = df_plot[label_col].astype(str).unique().tolist()
+    palette = sns.color_palette("husl", len(labels))
+
+    for i, lab in enumerate(labels):
+        sub = df_plot[df_plot[label_col].astype(str) == str(lab)]
+        ax.scatter(sub["X"], sub["Y"], s=70, alpha=0.9, color=palette[i], label=str(lab), edgecolor="white", linewidths=0.6)
+        # anota UC_ID no ponto
+        for _, row in sub.iterrows():
+            ax.text(row["X"], row["Y"], str(int(row["UC_ID"])), fontsize=8, ha="center", va="center", color="black", alpha=0.9, clip_on=False)
+
+    ax.set_title(title)
+    ax.set_xlabel("Dimensão 1")
+    ax.set_ylabel("Dimensão 2")
+    ax.legend(title=label_col, bbox_to_anchor=(1.02, 1), loc="upper left", frameon=False)
+    ax.margins(0.05)
+
+    show_and_export_fig(scope_key, fig, base_name)
+    plt.close(fig)
+
+def _call_gpt_for_names(clusters_payload: list[dict], api_key: str) -> dict:
+    """
+    Envia um resumo de cada cluster para o GPT sugerir nomes.
+    Retorna dict {cluster_id: "Nome GPT"}.
+    """
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+    except Exception:
+        st.error("❌ Não foi possível inicializar o cliente OpenAI. Verifique se o pacote `openai` está instalado e a chave é válida.")
+        return {}
+
+    prompt = (
+        "Você receberá um conjunto de clusters de ementas. Para cada cluster, atribua um **nome temático curto e claro** "
+        "(máx. 4 palavras), em português, que represente o conteúdo central.\n"
+        "Responda **apenas** com JSON no formato:\n"
+        "{ \"nomes\": [ {\"cluster\": <id>, \"nome\": \"<Nome do cluster>\"}, ... ] }\n\n"
+        "Clusters:\n"
+    )
+    for c in clusters_payload:
+        prompt += f"- Cluster {c['cluster']}: Representante = {c['representante']}; Keywords = {', '.join(c['keywords'][:8])}; Exemplo de ementa: {c['amostra_ementa']}\n"
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+        raw = resp.choices[0].message.content or "{}"
+        data = json.loads(raw)
+        nomes = {}
+        for item in data.get("nomes", []):
+            cid = int(item.get("cluster"))
+            nome = str(item.get("nome", "")).strip()
+            if nome:
+                nomes[cid] = nome
+        return nomes
+    except Exception as e:
+        st.error(f"❌ Erro ao consultar GPT para nomear clusters: {e}")
+        return {}
+
+# -------------- Módulo principal -----------------
+
+def run_cluster(df: pd.DataFrame, scope_key: str):
+    """
+    Clusterização de ementas com:
+      - UC_ID sequencial
+      - KMeans (SBERT)
+      - Palavras-chave TF-IDF por cluster
+      - Nome do cluster = UC representante (centróide)
+      - Nome GPT opcional + gráfico comparativo
+      - Tabela consolidada com todas as UCs
+    """
+    st.header("📈 Clusterização (Ementa)")
+    st.markdown("""
+**O que é:** agrupa UCs por similaridade semântica das **Ementas** e projeta em 2D (cada ponto = 1 UC).  
+**Como analisar:** pontos próximos compartilham tema; use os **números (UC_ID)** para localizar a UC na tabela.  
+**Dicas:** ajuste **K**, confira as **palavras-chave** por cluster e, se quiser, peça ao **GPT** nomes temáticos.
+    """)
+
+    # --------- Coluna base ---------
     col_ementa = find_col(df, "Ementa")
     if not col_ementa:
-        st.error("Coluna 'Ementa' não encontrada.")
+        st.error("Coluna 'Ementa' não encontrada. Verifique o cabeçalho.")
         st.stop()
 
-    df_an = df.dropna(subset=[col_ementa])
+    df_an = df.dropna(subset=[col_ementa]).copy()
+    if df_an.empty:
+        st.warning("Não há ementas válidas para clusterizar.")
+        st.stop()
+
+    # Numeração sequencial
+    df_an = df_an.reset_index(drop=True)
+    df_an["UC_ID"] = np.arange(1, len(df_an) + 1)
+
     textos = df_an[col_ementa].astype(str).apply(replace_semicolons).tolist()
     nomes = df_an["Nome da UC"].astype(str).tolist()
 
-    # -----------------------------------------------------------
-    # 🧠 Geração de embeddings (com cache)
-    # -----------------------------------------------------------
-    @st.cache_data(show_spinner=False)
-    def get_embeddings(textos):
-        return l2_normalize(sbert_embed(textos))
+    # --------- Embeddings ---------
+    with st.spinner("🧠 Calculando embeddings SBERT..."):
+        emb = l2_normalize(sbert_embed(textos).astype(np.float32))
 
-    with st.spinner("🧠 Calculando embeddings semânticos (SBERT)..."):
-        emb = get_embeddings(textos)
+    # --------- KMeans ---------
+    max_k = min(12, max(2, len(df_an)))
+    k = st.slider("Número de clusters (K)", 2, max_k, min(6, max_k))
+    with st.spinner("🧮 Executando K-Means..."):
+        km = KMeans(n_clusters=k, random_state=42, n_init=10)
+        labels = km.fit_predict(emb)
 
-    # -----------------------------------------------------------
-    # 🔢 Definição do número de clusters
-    # -----------------------------------------------------------
-    st.markdown("### 🔢 Definição do número de clusters (K)")
-    if st.checkbox("Sugerir K automaticamente (método do cotovelo)", value=False):
-        distortions = []
-        K_range = range(2, 10)
-        for k in K_range:
-            km = KMeans(n_clusters=k, random_state=42)
-            km.fit(emb)
-            distortions.append(km.inertia_)
+    # --------- Representantes e keywords ---------
+    with st.spinner("🔎 Gerando representantes e palavras-chave..."):
+        reps = _representative_uc_by_centroid(emb, labels, nomes)
+        df_kw = _tfidf_top_keywords_per_cluster(textos, labels, top_k=8)
 
-        fig, ax = plt.subplots()
-        ax.plot(K_range, distortions, marker="o", color="#2ca02c")
-        ax.set_xlabel("Número de Clusters (K)")
-        ax.set_ylabel("Soma dos Erros Quadráticos (Inércia)")
-        ax.set_title("Método do Cotovelo (Elbow Method)")
-        show_and_export_fig(scope_key, fig, "cluster_elbow_method")
-        st.info("📊 Observe o ponto de inflexão do gráfico (cotovelo). Ele indica o K mais adequado.")
+    # Nome do cluster (representante)
+    cluster_names_initial = {cid: reps[cid]["uc"] for cid in range(k)}
 
-    # -----------------------------------------------------------
-    # 🧩 Clusterização manual com numeração de ementas
-    # -----------------------------------------------------------
-    k = st.slider("Número de clusters (K)", 2, 10, 5)
-    km = KMeans(n_clusters=k, random_state=42)
-    labels = km.fit_predict(emb)
+    # --------- Projeção 2D ---------
+    with st.spinner("🗺️ Projetando em 2D..."):
+        xy = _project_2d(emb)
+    df_plot = pd.DataFrame({"UC_ID": df_an["UC_ID"], "Nome da UC": nomes, "Cluster": labels, "X": xy[:, 0], "Y": xy[:, 1], "Ementa": textos})
+    df_plot["Nome do Cluster (Rep.)"] = df_plot["Cluster"].map(cluster_names_initial)
 
-    uc_ids = list(range(1, len(nomes) + 1))
+    # --------- Tabela: UCs por Cluster ---------
+    st.markdown("### 📋 UCs x Clusters (com UC_ID)")
+    df_out = df_plot[["UC_ID", "Nome da UC", "Cluster", "Nome do Cluster (Rep.)", "Ementa"]].sort_values(["Cluster", "UC_ID"])
+    st.dataframe(df_out, use_container_width=True, height=420)
+    export_table(scope_key, df_out, "clusters_ucid", "Clusters_UCIDs")
 
-    df_out = pd.DataFrame({
-        "UC_ID": uc_ids,
-        "Nome da UC": nomes,
-        "Cluster": labels,
-        "Ementa": textos
-    })
+    # --------- Palavras-chave por cluster ---------
+    st.markdown("### 🔤 Palavras-chave (TF-IDF) por Cluster")
+    if not df_kw.empty:
+        df_kw["Nome do Cluster (Rep.)"] = df_kw["Cluster"].map(cluster_names_initial)
+        df_kw["Palavras-chave (Top)"] = df_kw["Palavras-chave"].apply(lambda xs: ", ".join(xs) if xs else "—")
+        st.dataframe(df_kw[["Cluster", "Nome do Cluster (Rep.)", "Palavras-chave (Top)"]], use_container_width=True)
+        export_table(scope_key, df_kw[["Cluster", "Palavras-chave (Top)"]], "clusters_keywords", "Clusters_Keywords")
+    else:
+        st.info("Não foi possível extrair palavras-chave (TF-IDF) para os clusters.")
 
-    # -----------------------------------------------------------
-    # 🧮 Determinação da UC representativa (centróide)
-    # -----------------------------------------------------------
-    representative_ucs = []
-    for c in range(k):
-        cluster_points = emb[labels == c]
-        centroid = km.cluster_centers_[c]
-        distances = np.linalg.norm(cluster_points - centroid, axis=1)
-        idx = np.argmin(distances)
-        uc_name = df_out[df_out["Cluster"] == c]["Nome da UC"].iloc[idx]
-        uc_id = df_out[df_out["Cluster"] == c]["UC_ID"].iloc[idx]
-        representative_ucs.append(f"{uc_id} — {uc_name}")
-
-    # -----------------------------------------------------------
-    # 🧩 Palavras-chave por cluster (seguro)
-    # -----------------------------------------------------------
-    st.markdown("### 🧩 Tópicos predominantes por Cluster")
-    safe_stopwords = build_stopwords()
-
-    vectorizer = CountVectorizer(
-        stop_words=safe_stopwords,
-        max_features=1000,
-        token_pattern=r"(?u)\b\w\w+\b"
+    # --------- Gráfico 1: rótulo baseado no representante ---------
+    st.markdown("### 🗺️ Dispersão 2D (rótulo = UC representante)")
+    _plot_scatter(
+        df_plot.assign(_label=df_plot["Nome do Cluster (Rep.)"]),
+        title="Distribuição (Ementa) — SBERT — rótulo por UC representante",
+        label_col="_label",
+        scope_key=scope_key,
+        base_name="cluster_scatter_representante"
     )
 
-    X = vectorizer.fit_transform(textos)
-    words = np.array(vectorizer.get_feature_names_out())
+    # --------- Nomear com GPT (opcional) ---------
+    st.markdown("### 🤖 Nomear Clusters com GPT (opcional)")
+    st.caption("Se desejar, forneça sua OpenAI API Key para o GPT sugerir nomes temáticos curtos para cada cluster.")
+    api_key = st.text_input("🔑 OpenAI API Key", type="password")
 
-    cluster_keywords = []
-    for c in range(k):
-        mask = (labels == c)
-        cluster_texts = X[mask].sum(axis=0).A1
-        top_idx = cluster_texts.argsort()[-10:][::-1]
-        top_words = words[top_idx]
-        cluster_keywords.append({
-            "Cluster": c,
-            "UC Representativa": representative_ucs[c],
-            "Palavras-Chave": ", ".join(top_words)
+    gpt_names = {}
+    if api_key and st.button("🚀 Sugerir nomes com GPT"):
+        # Prepara amostra compacta por cluster
+        payload = []
+        for cid in range(k):
+            ex_idxs = np.where(labels == cid)[0]
+            exemplo_ementa = textos[int(ex_idxs[0])] if ex_idxs.size > 0 else ""
+            keywords = df_kw.loc[df_kw["Cluster"] == cid, "Palavras-chave"]
+            keywords = keywords.iloc[0] if not keywords.empty else []
+            payload.append({
+                "cluster": int(cid),
+                "representante": cluster_names_initial.get(cid, f"Cluster {cid}"),
+                "keywords": keywords if isinstance(keywords, list) else [],
+                "amostra_ementa": exemplo_ementa[:400]
+            })
+
+        with st.spinner("Consultando GPT para nomear clusters..."):
+            gpt_names = _call_gpt_for_names(payload, api_key)
+
+        if gpt_names:
+            st.success("Nomes sugeridos recebidos!")
+        else:
+            st.warning("O GPT não retornou nomes. Mantendo rótulos pelos representantes.")
+
+    # --------- Comparação Antes x Depois (se houver GPT) ---------
+    if gpt_names:
+        df_names = pd.DataFrame({
+            "Cluster": list(range(k)),
+            "Nome (Rep.)": [cluster_names_initial[c] for c in range(k)],
+            "Nome GPT": [gpt_names.get(c, cluster_names_initial[c]) for c in range(k)]
         })
+        st.markdown("### 🔁 Comparação de nomes (Antes × Depois)")
+        st.dataframe(df_names, use_container_width=True)
+        export_table(scope_key, df_names, "clusters_nomes_antes_depois", "Clusters_Nomes_Comparacao")
 
-    df_keywords = pd.DataFrame(cluster_keywords)
-    st.dataframe(df_keywords, use_container_width=True)
+        # Gráfico 2 com rótulo GPT
+        df_plot["Nome GPT"] = df_plot["Cluster"].map(lambda c: gpt_names.get(int(c), cluster_names_initial[int(c)]))
+        st.markdown("### 🗺️ Dispersão 2D (rótulo = Nome GPT)")
+        _plot_scatter(
+            df_plot.assign(_label=df_plot["Nome GPT"]),
+            title="Distribuição (Ementa) — SBERT — rótulo por Nome GPT",
+            label_col="_label",
+            scope_key=scope_key,
+            base_name="cluster_scatter_gpt"
+        )
 
-    # -----------------------------------------------------------
-    # 🧭 Visualização PCA 2D (técnica)
-    # -----------------------------------------------------------
-    st.markdown("### 🧭 Visualização dos Clusters (PCA 2D)")
-    pca = PCA(n_components=2, random_state=42)
-    reduced = pca.fit_transform(emb)
-
-    df_pca = pd.DataFrame({
-        "x": reduced[:, 0],
-        "y": reduced[:, 1],
-        "Cluster": labels,
-        "UC_ID": uc_ids,
-        "Nome da UC": nomes
-    })
-
-    fig, ax = plt.subplots(figsize=(9, 7))
-    sns.scatterplot(
-        data=df_pca,
-        x="x", y="y",
-        hue="Cluster",
-        palette="tab10",
-        s=80, ax=ax
-    )
-    ax.set_title("Clusters Técnicos (PCA 2D)")
-    ax.set_xlabel("Componente Principal 1")
-    ax.set_ylabel("Componente Principal 2")
-    ax.legend(title="Cluster", bbox_to_anchor=(1.05, 1), loc='upper left')
-
-    for _, row in df_pca.iterrows():
-        ax.text(row["x"], row["y"], str(row["UC_ID"]), fontsize=8, alpha=0.7)
-
-    show_and_export_fig(scope_key, fig, "cluster_pca_2d")
-
-    # -----------------------------------------------------------
-    # 🤖 Nomeação automática dos clusters (GPT opcional)
-    # -----------------------------------------------------------
-    st.markdown("---")
-    st.subheader("🤖 Nomeação Inteligente dos Clusters (opcional)")
-
-    api_key = st.text_input("🔑 OpenAI API Key (opcional para nomeação GPT)", type="password")
-    if api_key:
-        client = OpenAI(api_key=api_key)
-        st.info("O modelo GPT analisará os tópicos e sugerirá nomes representativos para cada cluster.")
-        cluster_names = []
-
-        with st.spinner("🧠 Gerando nomes sugestivos para os clusters..."):
-            for _, row in df_keywords.iterrows():
-                prompt = f"""
-                Você é um especialista em educação superior e análise curricular.
-                Dê um nome temático curto e representativo para o seguinte cluster de disciplinas:
-
-                UC representativa: {row['UC Representativa']}
-                Palavras-chave: {row['Palavras-Chave']}
-
-                Responda apenas com o nome proposto (sem explicações adicionais).
-                """
-                try:
-                    resp = client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.3,
-                    )
-                    nome_cluster = resp.choices[0].message.content.strip().replace('"', '')
-                    cluster_names.append(nome_cluster)
-                except Exception as e:
-                    cluster_names.append(f"Erro: {str(e)}")
-
-        df_keywords["Nome GPT"] = cluster_names
-        st.dataframe(df_keywords, use_container_width=True)
-        export_table(scope_key, df_keywords, "cluster_keywords_gpt", "Clusters Nomeados GPT")
-
-        # -----------------------------------------------------------
-        # 📊 Comparativo visual: Clusters técnicos × Nomeados GPT
-        # -----------------------------------------------------------
-        st.markdown("### 📊 Comparativo visual — Clusters técnicos × Nomeados GPT")
-
-        df_merge = df_pca.merge(
-            df_keywords[["Cluster", "Nome GPT"]],
+    # --------- Tabela Consolidada (todas as UCs + nomes GPT, se existirem) ---------
+    st.markdown("### 📋 Tabela Consolidada — Todas as UCs e Clusters")
+    if gpt_names:
+        df_full = df_out.merge(
+            pd.DataFrame({
+                "Cluster": list(range(k)),
+                "Nome GPT": [gpt_names.get(c, cluster_names_initial[c]) for c in range(k)]
+            }),
             on="Cluster",
             how="left"
         )
-
-        st.caption(
-            """
-            Este gráfico compara a distribuição original dos clusters numéricos (técnicos)
-            com os nomes interpretativos sugeridos pelo GPT.  
-            Isso permite verificar a **consistência semântica e temática** dos agrupamentos.
-            """
-        )
-
-        fig2, ax2 = plt.subplots(figsize=(9, 7))
-        sns.scatterplot(
-            data=df_merge,
-            x="x", y="y",
-            hue="Nome GPT",
-            palette="tab10",
-            s=80, ax=ax2
-        )
-        ax2.set_title("Clusters Nomeados GPT (PCA 2D)")
-        ax2.set_xlabel("Componente Principal 1")
-        ax2.set_ylabel("Componente Principal 2")
-        ax2.legend(title="Nome GPT", bbox_to_anchor=(1.05, 1), loc='upper left')
-
-        for _, row in df_merge.iterrows():
-            ax2.text(row["x"], row["y"], str(row["UC_ID"]), fontsize=8, alpha=0.7)
-
-        show_and_export_fig(scope_key, fig2, "cluster_pca_2d_gpt")
-
-        st.markdown(
-            """
-            **🧠 Como interpretar este comparativo:**
-            - Se as áreas coloridas são semelhantes entre os dois gráficos, o GPT manteve a coerência dos agrupamentos.
-            - Diferenças sutis indicam **reestruturações temáticas**: o GPT pode ter unido ou dividido clusters conforme o sentido pedagógico.
-            - Isso ajuda a transformar **clusters estatísticos em núcleos conceituais interpretáveis**.
-            """
-        )
     else:
-        st.info("Insira sua chave de API para permitir que o GPT nomeie e compare os clusters.")
+        df_full = df_out.copy()
+        df_full["Nome GPT"] = "—"
 
-    # -----------------------------------------------------------
-    # 💾 Exportação dos resultados
-    # -----------------------------------------------------------
-    export_table(scope_key, df_out, "clusterizacao", "Clusters (Ementa)")
-    export_table(scope_key, df_keywords, "cluster_keywords", "Palavras-Chave por Cluster")
+    df_full = df_full[["UC_ID", "Nome da UC", "Cluster", "Nome do Cluster (Rep.)", "Nome GPT", "Ementa"]]
+    st.dataframe(df_full, use_container_width=True, height=480)
+    export_table(scope_key, df_full, "cluster_consolidado", "UCs e Clusters Consolidados")
+
+    # --------- Export ZIP geral ---------
+    st.markdown("### 📦 Centro de Downloads (Clusterização)")
     export_zip_button(scope_key)
 
-    # -----------------------------------------------------------
-    # 📘 Interpretação pedagógica
-    # -----------------------------------------------------------
-    st.markdown("---")
-    st.subheader("📘 Como interpretar os resultados")
+    # Dicas de leitura
     st.markdown(
         """
-        **1️⃣ Significado dos clusters:**
-        - Cada grupo reúne UCs com **ementas semanticamente semelhantes**.
-        - UCs próximas compartilham **conteúdos, abordagens e competências** similares.
-
-        **2️⃣ Interpretação prática:**
-        - Clusters grandes indicam **núcleos formativos amplos** (ex.: Matemática, Programação, Gestão).  
-        - Clusters pequenos podem sinalizar **especializações** ou **redundâncias curriculares**.  
-        - A UC representativa indica **a disciplina mais central** dentro do tema.
-
-        **3️⃣ Uso com GPT:**
-        - O nome sugerido pelo GPT ajuda a **etiquetar os núcleos temáticos** de forma interpretável.
-        - Ideal para relatórios de análise curricular, consolidação de PPCs e reuniões de NDE.
-
-        **4️⃣ Comparativo pós-GPT:**
-        - O gráfico final evidencia como o GPT reorganizou semanticamente os clusters,
-          ajudando a alinhar estatísticas a significados pedagógicos.
-
-        **5️⃣ Aplicações práticas:**
-        - Diagnóstico de **redundância e sobreposição curricular**.
-        - Identificação de **áreas interdisciplinares** emergentes.
-        - Planejamento de **integração entre clusters correlatos**.
+        🔍 **Interpretação**  
+        - Cada ponto é uma **UC** (identificada por **UC_ID**).  
+        - A legenda mostra o **nome do cluster** (por representante ou pelo GPT, se acionado).  
+        - **Palavras-chave** ajudam a entender o tema predominante de cada grupo.  
+        - Use a **tabela consolidada** para localizar rapidamente a UC no gráfico (via UC_ID).
         """
     )
