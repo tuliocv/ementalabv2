@@ -1,10 +1,10 @@
 # ===============================================================
-# 🧬 EmentaLabv2 — Similaridade, Redundância e Alinhamento (v12.0)
+# 🧬 EmentaLabv2 — Similaridade, Redundância e Alinhamento (v11.2)
 # ===============================================================
 # Inclui:
 # - 🔁 run_redundancy: redundância entre UCs (global)
 # - 🔬 run_pair_analysis: comparação frase a frase
-# - 🧭 run_alignment_matrix: alinhamento Objetos × Competências & DCN (robusta)
+# - 🧭 run_alignment_matrix: alinhamento Objetos × Competências & DCN
 # ===============================================================
 
 import streamlit as st
@@ -18,6 +18,21 @@ from openai import OpenAI
 from utils.embeddings import l2_normalize, sbert_embed
 from utils.exportkit import export_table, export_zip_button
 from utils.text_utils import find_col, replace_semicolons, _split_sentences
+
+
+# ===============================================================
+# 🧩 Função auxiliar para formatação segura
+# ===============================================================
+def safe_format(df, decimals=2, cmap="YlGnBu"):
+    """Converte colunas numéricas e aplica estilo visual seguro."""
+    df_fmt = df.copy()
+    for c in df_fmt.columns[1:]:
+        df_fmt[c] = pd.to_numeric(df_fmt[c], errors="coerce")
+    return (
+        df_fmt.style
+        .format(f"{{:.{decimals}f}}")
+        .background_gradient(cmap=cmap, vmin=0, vmax=1)
+    )
 
 
 # ===============================================================
@@ -48,10 +63,9 @@ def run_redundancy(df, scope_key):
 
     df_mat = pd.DataFrame(S, index=nomes, columns=nomes)
     st.markdown("### 🧮 Matriz de Similaridade Global")
+
     st.dataframe(
-        df_mat.head(30)
-        .style.format("{:.2f}")
-        .background_gradient(cmap="RdYlGn_r", vmin=0, vmax=1),
+        safe_format(df_mat.head(30), 2, "RdYlGn_r"),
         use_container_width=True,
     )
     export_table(scope_key, df_mat, "redundancia_matriz", "Matriz de Similaridade entre UCs")
@@ -66,7 +80,7 @@ def run_redundancy(df, scope_key):
     if pares:
         df_pares = pd.DataFrame(pares).sort_values("Similaridade", ascending=False)
         st.markdown("### 🔗 Pares de UCs com alta similaridade")
-        st.dataframe(df_pares.head(100), use_container_width=True)
+        st.dataframe(safe_format(df_pares, 3, "YlOrRd"), use_container_width=True)
         export_table(scope_key, df_pares, "redundancia_pares", "UCs com alta similaridade")
 
         fig, ax = plt.subplots(figsize=(7, 4))
@@ -127,14 +141,14 @@ def run_pair_analysis(df, scope_key):
     for i, s_row in enumerate(sim):
         j = np.argmax(s_row)
         rows.append({
-            "Similaridade": s_row[j],
+            "Similaridade": float(s_row[j]),
             "Trecho A": ph_a[i],
             "Trecho B": ph_b[j]
         })
     df_out = pd.DataFrame(rows).sort_values("Similaridade", ascending=False)
 
     st.markdown("### 🧩 Trechos mais semelhantes")
-    st.dataframe(df_out.head(15).style.format({"Similaridade": "{:.3f}"}), use_container_width=True)
+    st.dataframe(safe_format(df_out, 3, "PuBu"), use_container_width=True)
     export_table(scope_key, df_out, f"redundancia_{uc_a}_vs_{uc_b}", f"Redundância Frase a Frase: {uc_a} vs {uc_b}")
     export_zip_button(scope_key)
 
@@ -153,12 +167,13 @@ def run_pair_analysis(df, scope_key):
 # 🧭 3. Matriz de Similaridade (Objetos × Competências & DCN)
 # ===============================================================
 def run_alignment_matrix(df, scope_key, client=None):
+    """Avalia alinhamento semântico entre Objetos, Competências e DCN."""
     st.header("🧭 Matriz de Similaridade — Objetos × Competências & DCN")
     st.caption(
         """
         Mede o quanto cada UC está semanticamente **alinhada** entre:
         - **Objetos de Conhecimento × Competências do Egresso**  
-        - **Objetos de Conhecimento × Relação DCN**
+        - **Objetos de Conhecimento × Competências das DCNs**
 
         Valores próximos de **1.00** indicam **forte coerência** entre o que é ensinado,
         o perfil do egresso e as competências normativas das DCNs.
@@ -167,70 +182,44 @@ def run_alignment_matrix(df, scope_key, client=None):
 
     col_obj = find_col(df, "Objetos de conhecimento")
     col_comp = find_col(df, "Competências do Perfil do Egresso")
-    col_rel_dcn = find_col(df, "Relação DCN") or find_col(df, "Competências DCN")
+    col_dcn = find_col(df, "Competências DCN")
 
     if not col_obj:
         st.error("Coluna 'Objetos de conhecimento' não encontrada.")
         return
-    if not (col_comp or col_rel_dcn):
-        st.error("Nenhuma coluna de competências encontrada ('Egresso' ou 'Relação DCN').")
+    if not (col_comp or col_dcn):
+        st.error("Nenhuma coluna de competências encontrada.")
         return
 
     df_valid = df.fillna("")
+    textos_obj = df_valid[col_obj].astype(str).tolist()
     nomes = df_valid["Nome da UC"].astype(str).tolist()
+    emb_obj = l2_normalize(sbert_embed(textos_obj))
 
-    # ---------- Cálculo robusto de similaridade ----------
-    def calculate_aggregate_similarity(df_scope, col_objetos, col_comp, col_rel_dcn):
-        campos_chave = {
-            "Competências do Perfil do Egresso": col_comp,
-            "Objetos de conhecimento": col_objetos,
-            "Relação DCN": col_rel_dcn,
-        }
-        cols_validas = [c for c in campos_chave.values() if c and c in df_scope.columns]
-        if len(cols_validas) < 2:
-            return None, "Dados insuficientes."
-
-        textos = {
-            k: df_scope[v].fillna("").astype(str).apply(replace_semicolons).tolist()
-            for k, v in campos_chave.items() if v in df_scope.columns
-        }
-        emb = {k: l2_normalize(sbert_embed(v)) for k, v in textos.items()}
-
-        metrics = {}
-        if 'Objetos de conhecimento' in emb and 'Competências do Perfil do Egresso' in emb:
-            sim = np.sum(emb['Objetos de conhecimento'] * emb['Competências do Perfil do Egresso'], axis=1)
-            metrics['Sim. Obj × Comp Egresso'] = sim
-        if 'Objetos de conhecimento' in emb and 'Relação DCN' in emb:
-            sim = np.sum(emb['Objetos de conhecimento'] * emb['Relação DCN'], axis=1)
-            metrics['Sim. Obj × DCN'] = sim
-
-        if not metrics:
-            return None, "Não foi possível calcular similaridade."
-        return metrics, None
-
-    with st.spinner("🧠 Calculando similaridades semânticas..."):
-        metrics, err = calculate_aggregate_similarity(df_valid, col_obj, col_comp, col_rel_dcn)
-        if err:
-            st.error(err)
-            return
+    results = []
+    if col_comp:
+        emb_comp = l2_normalize(sbert_embed(df_valid[col_comp].astype(str).tolist()))
+        results.append(("Objetos × Competências Egresso", np.diag(np.dot(emb_obj, emb_comp.T))))
+    if col_dcn:
+        emb_dcn = l2_normalize(sbert_embed(df_valid[col_dcn].astype(str).tolist()))
+        results.append(("Objetos × Competências DCN", np.diag(np.dot(emb_obj, emb_dcn.T))))
 
     df_res = pd.DataFrame({"UC": nomes})
-    for k, v in metrics.items():
-        df_res[k] = v
-    df_res = df_res.replace([np.inf, -np.inf], np.nan).fillna(0)
+    for label, vals in results:
+        df_res[label] = vals
 
     st.markdown("### 📈 Similaridade entre Dimensões")
-    st.dataframe(df_res.style.format("{:.2f}"), use_container_width=True)
+    st.dataframe(safe_format(df_res, 2, "YlGnBu"), use_container_width=True)
     export_table(scope_key, df_res, "matriz_objetos_competencias", "Matriz Objetos × Competências/DCN")
 
-    # ---------- Gráfico ----------
-    st.markdown("### 🌡️ Mapa de Calor de Alinhamento")
+    # 🔹 Gráfico
     fig, ax = plt.subplots(figsize=(8, 5))
     sns.heatmap(df_res.set_index("UC"), annot=True, cmap="YlGnBu", fmt=".2f", linewidths=0.5, ax=ax)
     ax.set_title("Matriz de Similaridade (Objetos × Competências / DCN)")
+    plt.xticks(rotation=30, ha="right")
     st.pyplot(fig, use_container_width=True)
 
-    # ---------- Relatório GPT ----------
+    # -------------------- GPT Relatório --------------------
     if client is None:
         api_key = st.session_state.get("global_api_key", "")
         if api_key:
@@ -244,24 +233,22 @@ def run_alignment_matrix(df, scope_key, client=None):
 
     if client:
         resumo = {
-            "médias": {col: float(df_res[col].mean()) for col in df_res.columns if col != "UC"},
-            "ucs_baixas": df_res[df_res.iloc[:, 1:].mean(axis=1) < 0.65]["UC"].tolist(),
-            "total_ucs": len(df_res),
+            "media_egresso": float(df_res["Objetos × Competências Egresso"].mean()) if "Objetos × Competências Egresso" in df_res else None,
+            "media_dcn": float(df_res["Objetos × Competências DCN"].mean()) if "Objetos × Competências DCN" in df_res else None,
+            "ucs_baixas": df_res[df_res.iloc[:, 1:].mean(axis=1) < 0.65]["UC"].tolist()
         }
         prompt = f"""
-        Você é um avaliador curricular.
-        Analise os resultados da matriz de similaridade abaixo:
+        Você é um avaliador curricular. Analise os seguintes dados:
         {resumo}
 
-        Gere um relatório técnico curto e direto, destacando:
+        Gere um relatório técnico curto (máx. 150 palavras) com:
         - Pontos fortes
         - Fragilidades
         - Recomendações práticas
-
-        Linguagem técnica, objetiva e sem redundância.
+        Linguagem objetiva e técnica.
         """
         try:
-            with st.spinner("📄 Gerando relatório via GPT..."):
+            with st.spinner("🧠 Gerando relatório via GPT..."):
                 resp = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[{"role": "user", "content": prompt}],
@@ -273,20 +260,6 @@ def run_alignment_matrix(df, scope_key, client=None):
         except Exception as e:
             st.error(f"Erro ao gerar relatório via GPT: {e}")
     else:
-        st.info("🔑 Chave da OpenAI não configurada — relatório não gerado.")
-
-    # ---------- Interpretação ----------
-    st.markdown("---")
-    st.subheader("📘 Como interpretar os resultados")
-    st.markdown(
-        """
-        - **≥ 0.85:** Forte coerência entre o que é ensinado e as competências.  
-        - **0.65–0.85:** Coerência moderada; há convergência geral, mas com dispersões.  
-        - **< 0.65:** Baixa coerência; revisar descrição dos objetos e competências.  
-
-        💡 **Dica:** UCs com baixa coerência simultânea em *Objetos × Competências do Egresso* e *Objetos × DCN*
-        devem ser priorizadas em revisões curriculares.
-        """
-    )
+        st.info("🔑 Chave da OpenAI não encontrada — relatório não gerado.")
 
     export_zip_button(scope_key)
