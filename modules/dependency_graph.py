@@ -1,32 +1,37 @@
+# ===============================================================
+# 🔗 EmentaLabv2 — Sequenciamento / Grafo (GPT)
+# ===============================================================
 import streamlit as st
+import pandas as pd
+from openai import OpenAI
+from utils.text_utils import find_col, truncate
+from utils.exportkit import export_table, export_zip_button
 import networkx as nx
 import matplotlib.pyplot as plt
-from sentence_transformers import SentenceTransformer, util
 
-@st.cache_resource
-def load_dep_model():
-    return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+def run_graph(df, scope_key):
+    col_obj = find_col(df, "Objetos de conhecimento")
+    if not col_obj:
+        st.error("Coluna 'Objetos de conhecimento' não encontrada.")
+        st.stop()
 
-def dependency_graph(df, col_ementa="EMENTA", col_nome="NOME UC"):
-    st.header("🔗 Análise de Dependência Curricular (Grafo Dirigido)")
+    api_key = st.text_input("🔑 OpenAI API Key", type="password")
+    if not api_key:
+        st.stop()
 
-    if col_ementa not in df.columns or col_nome not in df.columns:
-        st.warning("A base deve conter as colunas 'NOME UC' e 'EMENTA'.")
-        return
+    client = OpenAI(api_key=api_key)
+    subset = df[["Nome da UC", col_obj]].dropna().head(10)
+    prompt = "Identifique relações de pré-requisito entre UCs:\n"
+    for _, r in subset.iterrows():
+        prompt += f"- {r['Nome da UC']}: {truncate(r[col_obj])}\n"
 
-    model = load_dep_model()
-    emb = model.encode(df[col_ementa].tolist(), convert_to_tensor=True)
-    sim = util.cos_sim(emb, emb).cpu().numpy()
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0
+    )
+    content = resp.choices[0].message.content
+    st.code(content[:800], language="json")
 
-    G = nx.DiGraph()
-    for i, uc1 in enumerate(df[col_nome]):
-        for j, uc2 in enumerate(df[col_nome]):
-            if i != j and sim[i, j] > 0.8:
-                G.add_edge(uc1, uc2, weight=sim[i, j])
-
-    pos = nx.spring_layout(G, seed=42)
-    plt.figure(figsize=(9, 7))
-    nx.draw(G, pos, with_labels=True, node_color='lightblue', edge_color='gray', font_size=8)
-    st.pyplot(plt)
-    st.info(f"Grafo com {len(G.nodes)} nós e {len(G.edges)} relações detectadas.")
-    return G
+    st.info("Visualização e parsing avançado estão desativados nesta versão modular.")
+    export_zip_button(scope_key)
