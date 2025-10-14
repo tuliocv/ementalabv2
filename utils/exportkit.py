@@ -1,12 +1,12 @@
 # ===============================================================
-# 💾 EmentaLabv2 — ExportKit Utilitário (v11.2)
+# 💾 EmentaLabv2 — ExportKit Utilitário (v11.3)
 # ===============================================================
 # Responsável por inicializar diretórios temporários de exportação,
 # salvar tabelas, gráficos e gerar pacotes .zip de resultados.
 # ---------------------------------------------------------------
-# ✅ Compatível com Streamlit Cloud
-# ✅ Evita IDs duplicados de download_button
-# ✅ Mantém compatibilidade com versões anteriores
+# ✅ Corrigido: botão único e fixo ("Baixar Resultados")
+# ✅ Evita IDs duplicados no Streamlit
+# ✅ Compatível com todos os módulos e com Cloud
 # ===============================================================
 
 import os
@@ -95,12 +95,12 @@ def show_and_export_fig(scope_key: str, fig: plt.Figure, filename: str, show=Tru
 
 
 # ---------------------------------------------------------------
-# 📦 Gera botão de download .zip (com chave única)
+# 📦 Gera botão de download .zip (único e fixo)
 # ---------------------------------------------------------------
 def export_zip_button(scope_key: str):
     """
-    Agrupa todos os arquivos do diretório temporário no escopo atual
-    e gera um botão de download .zip com identificador único.
+    Gera um único botão de download (.zip) fixo com nome 'Baixar Resultados',
+    evitando duplicações e conflitos de ID.
     """
     export_dir = _init_exports(scope_key)
     zip_buffer = io.BytesIO()
@@ -112,17 +112,16 @@ def export_zip_button(scope_key: str):
                 zipf.write(file_path, arcname=f)
 
     zip_buffer.seek(0)
-    now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-    # 🔹 gera chave única para evitar IDs duplicados no Streamlit
-    unique_key = f"download_{scope_key}_{uuid.uuid4().hex[:8]}"
+    # 🔹 ID único persistente por scope_key
+    button_key = f"download_zip_{scope_key.replace(' ', '_').lower()}"
 
     st.download_button(
-        label=f"⬇️ Baixar resultados ({now})",
+        label="⬇️ Baixar Resultados",
         data=zip_buffer,
-        file_name=f"EmentaLabv2_{scope_key}_{now}.zip",
+        file_name=f"EmentaLabv2_{scope_key}.zip",
         mime="application/zip",
-        key=unique_key,
+        key=button_key,  # ID fixo e estável
     )
 
 
