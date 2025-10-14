@@ -119,7 +119,7 @@ def run_longitudinal(df, scope_key, client=None):
     fig, ax = plt.subplots(figsize=(10, 7))
     nx.draw_networkx_nodes(G, pos, node_size=700, node_color="#A5D8FF", edgecolors="#1565C0")
     nx.draw_networkx_edges(G, pos, width=1.4, alpha=0.75, edge_color="#64B5F6")
-    nx.draw_networkx_labels(G, pos, font_size=8)
+    nx.draw_networkx_labels(G, pos, font_size=5)
     plt.title("Mapa de Conectividade Curricular", fontsize=12, fontweight="bold")
     plt.axis("off")
     st.pyplot(fig, use_container_width=True)
