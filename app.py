@@ -1,11 +1,15 @@
 # ===============================================================
-# 🧠 EmentaLabv2 — Inteligência Curricular (v10.5)
+# 🧠 EmentaLabv2 — Inteligência Curricular (v10.6)
 # ===============================================================
 import streamlit as st
 import pandas as pd
 from pathlib import Path
 from openai import OpenAI
+from importlib import reload
 
+# 🔁 Recarrega módulo exportkit (evita cache de versões antigas)
+import utils.exportkit as exportkit
+reload(exportkit)
 from utils.exportkit import _init_exports, export_zip_button
 from utils.text_utils import normalize_text
 
@@ -24,7 +28,7 @@ if logo.exists():
 st.sidebar.title("🧠 EmentaLabv2 — Inteligência Curricular")
 st.sidebar.markdown("---")
 
-# 🔑 API key global (usada por módulos com GPT)
+# 🔑 API key global (usada por módulos que utilizam GPT)
 st.sidebar.subheader("🔑 Configurações")
 api_key = st.sidebar.text_input(
     "OpenAI API Key (opcional)",
@@ -88,7 +92,7 @@ for col in filter_cols:
             active_filters[col] = sel
 
 # ---------------------------------------------------------------
-# 🧭 Menu de Análises (nomes institucionais)
+# 🧭 Menu de Análises
 # ---------------------------------------------------------------
 menu = st.sidebar.selectbox(
     "Tipo de análise",
@@ -107,7 +111,7 @@ menu = st.sidebar.selectbox(
     index=0
 )
 
-# define escopo e inicializa exportações
+# ✅ Define escopo e inicializa exportações corretamente
 scope_key = normalize_text(menu).replace(" ", "_")
 _init_exports(scope_key)
 
@@ -231,6 +235,6 @@ export_zip_button(scope_key)
 # ---------------------------------------------------------------
 st.markdown("---")
 st.caption("""
-📘 **EmentaLabv2** — Ferramenta de análise curricular inteligente.
+📘 **EmentaLabv2** — Ferramenta de análise curricular inteligente.  
 Desenvolvido para apoiar **NDEs e coordenações** na revisão de coerência, progressão cognitiva e integração pedagógica.
 """)
