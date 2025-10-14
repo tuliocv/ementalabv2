@@ -231,7 +231,7 @@ def _analysis_text(triples: List[Tuple[str, str, str]]) -> str:
 # ---------------------------------------------------------------
 # 🚀 Função principal (assinatura usada no app: run_graph(df, scope_key))
 # ---------------------------------------------------------------
-def run_graph(df: pd.DataFrame, scope_key: str):
+def run_graph(df: pd.DataFrame, scope_key: str, client=None):
     st.header("🔗 Dependência Curricular")
     st.caption(
         "Identifica relações de **pré-requisito (A → B)** e interdependência entre UCs a partir dos "
