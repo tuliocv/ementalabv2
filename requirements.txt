@@ -12,3 +12,4 @@ spacy
 pdfplumber
 openpyxl>=3.1.0
 pyvis
+streamlit-pyvis>=1.2.0
