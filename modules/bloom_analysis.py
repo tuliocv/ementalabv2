@@ -1,5 +1,5 @@
 # ===============================================================
-# 🧠 EmentaLabv2 — Mapa de Bloom (Heurística + GPT Refinement)
+# 🧠 EmentaLabv2 — Mapa de Bloom (Heurística + GPT Refinement v2)
 # ===============================================================
 import streamlit as st
 import seaborn as sns
@@ -13,7 +13,11 @@ from utils.exportkit import export_table, show_and_export_fig, export_zip_button
 # ---------------------------------------------------------------
 # Função principal
 # ---------------------------------------------------------------
-def run_bloom(df, scope_key):
+def run_bloom(df, scope_key, client=None):
+    """
+    Executa a análise dos níveis cognitivos segundo a Taxonomia de Bloom,
+    com duas abordagens: heurística e refinamento via GPT (se disponível).
+    """
     # -----------------------------------------------------------
     # 🏷️ Título e descrição
     # -----------------------------------------------------------
@@ -27,7 +31,7 @@ def run_bloom(df, scope_key):
         *Objetivos de Aprendizagem* das Unidades Curriculares (UCs).
 
         A classificação ocorre em duas etapas:
-        1️⃣ **Heurística automática**, baseada em verbos típicos associados aos níveis de Bloom;  
+        1️⃣ **Heurística automática**, baseada em verbos típicos associados aos níveis de Bloom.  
         2️⃣ **Refinamento GPT (opcional)**, que interpreta semanticamente o texto para ajustar o nível cognitivo.
         """
     )
@@ -63,13 +67,19 @@ def run_bloom(df, scope_key):
     # -----------------------------------------------------------
     st.markdown("---")
     st.subheader("🤖 Refinamento Inteligente com GPT (opcional)")
-    api_key = st.text_input("🔑 OpenAI API Key (opcional para refinamento GPT)", type="password")
 
-    if api_key:
-        client = OpenAI(api_key=api_key)
+    # Usa a chave global vinda do app, se houver
+    if client is None:
+        api_key = st.text_input("🔑 OpenAI API Key (opcional para refinamento GPT)", type="password")
+        if api_key:
+            client = OpenAI(api_key=api_key)
+    else:
+        st.success("✅ Chave GPT carregada do menu lateral.")
+
+    if client is not None:
         st.info("O modelo GPT analisará cada objetivo e sugerirá um nível de Bloom mais preciso.")
 
-        # ✅ Corrigido: merge entre df e df_out para garantir a coluna de texto original
+        # 🔹 Garante consistência entre heurístico e base original
         subset = df[["Nome da UC", col_obj]].merge(
             df_out[["Nome da UC", "Nível Bloom Predominante"]],
             on="Nome da UC",
@@ -79,13 +89,12 @@ def run_bloom(df, scope_key):
         refined_levels = []
         total = len(subset)
 
-        # Spinner temporário (oculta após o processamento)
         with st.spinner("🧠 Analisando objetivos com GPT..."):
             progress_bar = st.progress(0)
 
-            for i in range(len(subset)):
-                objetivo_texto = subset.iloc[i][col_obj]
-                nivel_heuristico = subset.iloc[i]["Nível Bloom Predominante"]
+            for i, row in subset.iterrows():
+                objetivo_texto = row[col_obj]
+                nivel_heuristico = row["Nível Bloom Predominante"]
 
                 prompt = f"""
                 Você é um especialista em taxonomia de Bloom.
@@ -123,46 +132,47 @@ def run_bloom(df, scope_key):
         df_gpt = subset.copy()
         df_gpt["Resultado GPT"] = refined_levels
 
-        # Conversão simplificada (regex de extração)
         df_gpt["Verbo GPT"] = df_gpt["Resultado GPT"].str.extract(r'"verbo"\s*:\s*"([^"]+)"')
         df_gpt["Nível Bloom GPT"] = df_gpt["Resultado GPT"].str.extract(r'"nivel_bloom"\s*:\s*"([^"]+)"')
         df_gpt["Justificativa"] = df_gpt["Resultado GPT"].str.extract(r'"justificativa"\s*:\s*"([^"]+)"')
 
         # -------------------------------------------------------
-        # 📊 Comparativo Heurística × GPT
+        # 📈 Comparativo Heurística × GPT
         # -------------------------------------------------------
         st.markdown("### 📈 Comparativo Heurístico × GPT")
+
         freq_gpt = df_gpt["Nível Bloom GPT"].value_counts(normalize=True).mul(100).round(1)
 
-        fig, ax = plt.subplots(1, 2, figsize=(12, 4))
-        sns.barplot(x=freq.index, y=freq.values, ax=ax[0], palette="crest")
-        ax[0].set_title("Distribuição Heurística")
-        ax[0].set_ylabel("% de UCs")
-        ax[0].set_xlabel("Nível de Bloom")
+        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+        sns.barplot(x=freq.index, y=freq.values, ax=axes[0], palette="crest")
+        axes[0].set_title("Distribuição Heurística")
+        axes[0].set_ylabel("% de UCs")
+        axes[0].set_xlabel("Nível de Bloom")
 
-        sns.barplot(x=freq_gpt.index, y=freq_gpt.values, ax=ax[1], palette="rocket")
-        ax[1].set_title("Distribuição GPT")
-        ax[1].set_ylabel("% de UCs")
-        ax[1].set_xlabel("Nível de Bloom (GPT)")
+        sns.barplot(x=freq_gpt.index, y=freq_gpt.values, ax=axes[1], palette="rocket")
+        axes[1].set_title("Distribuição GPT")
+        axes[1].set_ylabel("% de UCs")
+        axes[1].set_xlabel("Nível de Bloom (GPT)")
 
-        # ✅ Apenas uma renderização (sem duplicar)
         show_and_export_fig(scope_key, fig, "bloom_comparativo_gpt")
 
         # -------------------------------------------------------
-        # 📋 Tabela detalhada e métricas
+        # 📋 Resultados detalhados
         # -------------------------------------------------------
         st.markdown("### 📋 Resultados Detalhados por UC")
         df_gpt["Concordância"] = df_gpt.apply(
-            lambda r: "✅" if str(r["Nível Bloom GPT"]).strip().lower() == str(r["Nível Bloom Predominante"]).strip().lower() else "⚠️", axis=1
+            lambda r: "✅" if str(r["Nível Bloom GPT"]).strip().lower() == str(r["Nível Bloom Predominante"]).strip().lower()
+            else "⚠️", axis=1
         )
 
         concord_rate = (df_gpt["Concordância"] == "✅").mean() * 100
         st.metric("Taxa de Concordância Heurística × GPT", f"{concord_rate:.1f}%")
 
         st.dataframe(
-            df_gpt[
-                ["Nome da UC", col_obj, "Nível Bloom Predominante", "Nível Bloom GPT", "Verbo GPT", "Concordância", "Justificativa"]
-            ],
+            df_gpt[[
+                "Nome da UC", col_obj, "Nível Bloom Predominante",
+                "Nível Bloom GPT", "Verbo GPT", "Concordância", "Justificativa"
+            ]],
             use_container_width=True,
         )
 
@@ -170,7 +180,7 @@ def run_bloom(df, scope_key):
         export_zip_button(scope_key)
 
     else:
-        st.info("Insira sua chave de API da OpenAI para ativar o refinamento GPT.")
+        st.info("🔑 Insira sua chave de API da OpenAI na barra lateral ou abaixo para ativar o refinamento GPT.")
         export_zip_button(scope_key)
 
     # -----------------------------------------------------------
