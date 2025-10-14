@@ -1,144 +1,148 @@
 # ===============================================================
-# 🧭 EmentaLabv2 — Versão 10.0 (com menu lateral de API Key)
+# 🧠 EmentaLabv2 — Inteligência Curricular (v10.3)
 # ===============================================================
 
 import streamlit as st
 import pandas as pd
+from pathlib import Path
 from openai import OpenAI
-from utils.exportkit import _init_exports
+
+from utils.exportkit import _init_exports, export_zip_button
+from utils.text_utils import normalize_text
 
 # ---------------------------------------------------------------
-# 🧱 Configuração da Página
+# ⚙️ Configuração de Página
 # ---------------------------------------------------------------
-st.set_page_config(
-    page_title="EmentaLabv2 — Análise Curricular Inteligente",
-    page_icon="🧭",
-    layout="wide"
-)
+st.set_page_config(page_title="EmentaLabv2", layout="wide", page_icon="🧠")
 
 # ---------------------------------------------------------------
-# 🎨 Sidebar — Menu Principal
+# 🎨 Sidebar — Identidade e Configurações
 # ---------------------------------------------------------------
-st.sidebar.image("assets/logo.png", width=220)
-st.sidebar.markdown("---")
-st.sidebar.header("🔍 Menu de Análises")
+logo = Path("assets/logo.png")
+if logo.exists():
+    st.sidebar.image(str(logo), width=220)
 
-menu = st.sidebar.radio(
-    "Selecione o tipo de análise:",
-    [
-        "📈 Curva Bloom Progressiva",
-        "🎯 Alinhamento Objetivos × Competências",
-        "🧬 Redundância e Frase-a-Frase",
-        "📊 Clusterização Temática",
-        "🔗 Dependência Curricular (Grafo)",
-    ],
-    key="menu_principal"
-)
-
+st.sidebar.title("🧠 EmentaLabv2 — Inteligência Curricular")
 st.sidebar.markdown("---")
 
-# ---------------------------------------------------------------
-# 🔑 Configuração Global da API OpenAI
-# ---------------------------------------------------------------
-st.sidebar.markdown("## 🔑 Configurações Globais")
+# 🔑 Configuração global de API Key
+st.sidebar.subheader("🔑 Configurações Globais")
 api_key = st.sidebar.text_input(
     "OpenAI API Key",
     type="password",
     placeholder="sk-...",
-    help="Informe sua chave da OpenAI. Ela será usada apenas localmente nesta sessão."
+    help="Informe sua chave da OpenAI (opcional). Ela será usada nos módulos que utilizam GPT."
 )
-
 client = OpenAI(api_key=api_key) if api_key else None
-
 if api_key:
     st.sidebar.success("✅ Chave carregada com sucesso.")
 else:
-    st.sidebar.info("ℹ️ Insira a API Key para habilitar recursos GPT.")
-
+    st.sidebar.info("ℹ️ Insira a API Key apenas se desejar usar recursos de IA.")
 st.sidebar.markdown("---")
-st.sidebar.caption("💡 Dica: a chave é usada em módulos que utilizam GPT (Bloom, Alinhamento, Dependência).")
 
 # ---------------------------------------------------------------
-# 📤 Upload de Arquivo
+# 📂 Upload de Arquivo
 # ---------------------------------------------------------------
-st.sidebar.header("📂 Importar Dados")
-uploaded = st.sidebar.file_uploader(
-    "Envie sua planilha (Excel ou CSV)",
-    type=["xlsx", "csv"]
-)
+st.sidebar.header("📂 Base Curricular")
+uploaded = st.sidebar.file_uploader("Carregar arquivo (.xlsx ou .csv)", type=["xlsx", "csv"])
+if not uploaded:
+    st.info("👈 Envie um arquivo Excel ou CSV para iniciar a análise.")
+    st.stop()
 
-if uploaded is not None:
-    try:
-        df = pd.read_excel(uploaded) if uploaded.name.endswith(".xlsx") else pd.read_csv(uploaded)
-    except Exception as e:
-        st.error(f"Erro ao ler arquivo: {e}")
-        st.stop()
-else:
-    st.warning("Envie um arquivo para começar a análise.")
+try:
+    df = pd.read_excel(uploaded, engine="openpyxl") if uploaded.name.endswith(".xlsx") else pd.read_csv(uploaded)
+except Exception as e:
+    st.error(f"Erro ao carregar o arquivo: {e}")
     st.stop()
 
 # ---------------------------------------------------------------
-# 🧾 Inicializa pasta de exportação temporária
+# 🎯 Filtros
 # ---------------------------------------------------------------
-scope_key = _init_exports()
+st.sidebar.subheader("🎯 Filtros")
+for col in ["Nome do curso", "Modalidade do curso", "Tipo Graduação", "Cluster", "Tipo do componente"]:
+    if col in df.columns:
+        sel = st.sidebar.multiselect(col, sorted(df[col].dropna().unique()))
+        if sel:
+            df = df[df[col].isin(sel)]
 
 # ---------------------------------------------------------------
-# 🚀 Roteamento por Módulo
+# 🧭 Menu de Análises
 # ---------------------------------------------------------------
-if menu == "📈 Curva Bloom Progressiva":
+menu = st.sidebar.selectbox(
+    "Selecione a análise desejada:",
+    [
+        "📊 Resumo Geral",
+        "✅ Cobertura Curricular",
+        "📈 Curva Bloom Progressiva",
+        "🎯 Alinhamento de Objetivos e Competências",
+        "🧩 Similaridade e Redundância",
+        "🌐 Convergência Temática",
+        "🔗 Dependência Curricular",
+        "💬 Clareza e Sentimento das Ementas",
+        "📆 Análise Longitudinal",
+        "🤖 Relatório Consultivo"
+    ]
+)
+
+# Normaliza e cria escopo de exportação
+scope_key = normalize_text(menu).replace(" ", "_")
+_init_exports(scope_key)
+
+# ---------------------------------------------------------------
+# 🚀 Roteamento por Tipo de Análise
+# ---------------------------------------------------------------
+if menu == "📊 Resumo Geral":
+    from modules.summary_dashboard import run_summary
+    run_summary(df, scope_key)
+
+elif menu == "✅ Cobertura Curricular":
+    from modules.coverage_report import run_coverage
+    run_coverage(df, scope_key)
+
+elif menu == "📈 Curva Bloom Progressiva":
     from modules.bloom_analysis import run_bloom
-    st.title("📈 Curva Bloom Progressiva")
-    st.markdown("""
-    Esta análise avalia o **nível cognitivo predominante** dos objetivos de aprendizagem,
-    utilizando heurísticas linguísticas e (opcionalmente) o modelo GPT para refinar a classificação segundo a Taxonomia de Bloom.
-    """)
     run_bloom(df, scope_key, client)
 
-elif menu == "🎯 Alinhamento Objetivos × Competências":
-    from modules.alignment_analysis import run_alignment
-    st.title("🎯 Alinhamento Objetivos × Competências")
-    st.markdown("""
-    Analisa o **grau de coerência** entre os **objetivos de aprendizagem** e as **competências do perfil do egresso**,
-    utilizando similaridade semântica baseada em embeddings SBERT.
-    """)
+elif menu == "🎯 Alinhamento de Objetivos e Competências":
+    from modules.alignment_topk import run_alignment
     run_alignment(df, scope_key)
 
-elif menu == "🧬 Redundância e Frase-a-Frase":
-    from modules.redundancy_analysis import run_redundancy, run_pair_analysis
-    st.title("🧬 Redundância e Análise Frase-a-Frase")
-    st.markdown("""
-    Esta ferramenta identifica **sobreposições de conteúdo** entre UCs e permite comparar **trechos de ementas** frase a frase.
-    Ideal para revisar redundâncias e ajustar coerência curricular.
-    """)
-    tab1, tab2 = st.tabs(["🔁 Redundância entre UCs", "🔬 Comparação Frase-a-Frase"])
-    with tab1:
-        run_redundancy(df, scope_key)
-    with tab2:
-        run_pair_analysis(df, scope_key)
+elif menu == "🧩 Similaridade e Redundância":
+    from modules.redundancy_matrix import run_redundancy
+    run_redundancy(df, scope_key)
 
-elif menu == "📊 Clusterização Temática":
+elif menu == "🌐 Convergência Temática":
     from modules.clusterization import run_cluster
-    st.title("📊 Clusterização Temática das Ementas")
-    st.markdown("""
-    Agrupa as Unidades Curriculares (UCs) por **proximidade semântica dos conteúdos**.
-    Pode usar o GPT para **nomear automaticamente os clusters** e gerar visualizações comparativas.
-    """)
     run_cluster(df, scope_key, client)
 
-elif menu == "🔗 Dependência Curricular (Grafo)":
+elif menu == "🔗 Dependência Curricular":
     from modules.dependency_graph_interactive import run_graph_interactive
-    st.title("🔗 Mapa de Dependências Curriculares")
-    st.markdown("""
-    Este módulo identifica **relações de precedência e interdependência** entre as UCs,
-    gerando um **mapa hierárquico estático** com base nas ementas e justificativas textuais do GPT.
-    """)
     run_graph_interactive(df, scope_key, client)
+
+elif menu == "💬 Clareza e Sentimento das Ementas":
+    from modules.sentiment_analysis import run_sentiment
+    run_sentiment(df, scope_key, client)
+
+elif menu == "📆 Análise Longitudinal":
+    from modules.longitudinal_analysis import run_longitudinal
+    run_longitudinal(df, scope_key, client)
+
+elif menu == "🤖 Relatório Consultivo":
+    from modules.consultive_report import run_consultive
+    run_consultive(df, scope_key, client)
+
+# ---------------------------------------------------------------
+# 📦 Exportação Global
+# ---------------------------------------------------------------
+st.markdown("---")
+export_zip_button(scope_key)
 
 # ---------------------------------------------------------------
 # 🧭 Rodapé
 # ---------------------------------------------------------------
 st.markdown("---")
 st.caption("""
-📘 **EmentaLabv2** — Ferramenta de análise curricular inteligente.
-Desenvolvido para apoiar **NDEs e coordenações** na revisão de coerência e integração pedagógica entre Unidades Curriculares.
+📘 **EmentaLabv2** — Ferramenta de análise curricular inteligente.  
+Apoia NDEs e coordenações na revisão de coerência, progressão cognitiva e integração pedagógica das Unidades Curriculares.  
+Desenvolvido com 💙 e IA aplicada à educação.
 """)
