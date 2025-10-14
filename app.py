@@ -1,139 +1,93 @@
-# ===============================================================
-# EmentaLabv2 — Inteligência Curricular Modular (v8.2)
-# ===============================================================
-
 import streamlit as st
 import pandas as pd
-import openpyxl
 from pathlib import Path
 
-# ---------------------------------------------------------------
-# 1. CONFIGURAÇÕES INICIAIS
-# ---------------------------------------------------------------
-st.set_page_config(
-    page_title="EmentaLabv2 — Inteligência Curricular",
-    page_icon="🧠",
-    layout="wide"
-)
+from utils.exportkit import _init_exports, export_zip_button
+from utils.text_utils import normalize_text
 
-# ---------------------------------------------------------------
-# 2. LOGO / CABEÇALHO
-# ---------------------------------------------------------------
-logo_path = Path("assets/logo.png")
-if logo_path.exists():
-    st.sidebar.image(str(logo_path), width=220)
-else:
-    st.sidebar.markdown("## 🧠 EmentaLabv2")
+# Configuração de página
+st.set_page_config(page_title="EmentaLabv2", layout="wide", page_icon="🧠")
 
-st.sidebar.title("🧭 Navegação")
+# Logo e título
+logo = Path("assets/logo.png")
+if logo.exists():
+    st.sidebar.image(str(logo), width=220)
+st.sidebar.title("🧠 EmentaLabv2 — Inteligência Curricular")
 
-# ---------------------------------------------------------------
-# 3. UPLOAD DO ARQUIVO
-# ---------------------------------------------------------------
+# Upload
 uploaded = st.sidebar.file_uploader("📂 Carregar base curricular (.xlsx ou .csv)", type=["xlsx", "csv"])
-
 if not uploaded:
-    st.info("👈 Envie um arquivo Excel ou CSV para iniciar a análise.")
+    st.info("👈 Envie um arquivo Excel ou CSV para iniciar.")
     st.stop()
 
 try:
-    if uploaded.name.lower().endswith(".csv"):
-        df = pd.read_csv(uploaded)
-    else:
-        df = pd.read_excel(uploaded, engine="openpyxl")
+    df = pd.read_excel(uploaded, engine="openpyxl") if uploaded.name.endswith(".xlsx") else pd.read_csv(uploaded)
 except Exception as e:
-    st.error(f"❌ Erro ao carregar o arquivo: {e}")
+    st.error(f"Erro ao carregar: {e}")
     st.stop()
 
-# ---------------------------------------------------------------
-# 4. FILTROS DE CONTEXTO
-# ---------------------------------------------------------------
-st.sidebar.markdown("---")
-st.sidebar.subheader("🎯 Filtros de Contexto")
+# Filtros
+st.sidebar.subheader("🎯 Filtros")
+for col in ["Nome do curso", "Modalidade do curso", "Tipo Graduação", "Cluster", "Tipo do componente"]:
+    if col in df.columns:
+        sel = st.sidebar.multiselect(col, sorted(df[col].dropna().unique()))
+        if sel:
+            df = df[df[col].isin(sel)]
 
-if "Nome do curso" in df.columns:
-    cursos = sorted(df["Nome do curso"].dropna().unique().tolist())
-    curso_sel = st.sidebar.multiselect("📘 Nome do Curso", cursos)
-    if curso_sel:
-        df = df[df["Nome do curso"].isin(curso_sel)]
+# Menu
+menu = st.sidebar.selectbox("Selecione a análise:", [
+    "📊 Resumo",
+    "🔎 Relatório de Cobertura",
+    "🧩 Similaridade (Objetos × Comp & DCN)",
+    "🎯 Alinhamento (Objetivos × Competências)",
+    "🧬 Redundância entre UCs",
+    "🔬 Análise Pontual (Frase a Frase)",
+    "🧠 Mapa de Bloom (Heurística + GPT)",
+    "📈 Clusterização (Ementa)",
+    "🔗 Sequenciamento / Grafo (GPT)",
+    "🤖 Relatório Consultivo (GPT)"
+])
 
-if "Modalidade do curso" in df.columns:
-    modalidades = sorted(df["Modalidade do curso"].dropna().unique().tolist())
-    mod_sel = st.sidebar.multiselect("🏫 Modalidade do Curso", modalidades)
-    if mod_sel:
-        df = df[df["Modalidade do curso"].isin(mod_sel)]
+scope_key = normalize_text(menu).replace(" ", "_")
+_init_exports(scope_key)
 
-if "Tipo Graduação" in df.columns:
-    tipos = sorted(df["Tipo Graduação"].dropna().unique().tolist())
-    tipo_sel = st.sidebar.multiselect("🎓 Tipo de Graduação", tipos)
-    if tipo_sel:
-        df = df[df["Tipo Graduação"].isin(tipo_sel)]
+# Chamada dinâmica
+if menu == "📊 Resumo":
+    from modules.summary_dashboard import run_summary
+    run_summary(df, scope_key)
 
-if "Cluster" in df.columns:
-    clusters = sorted(df["Cluster"].dropna().unique().tolist())
-    cluster_sel = st.sidebar.multiselect("🌐 Cluster", clusters)
-    if cluster_sel:
-        df = df[df["Cluster"].isin(cluster_sel)]
+elif menu == "🔎 Relatório de Cobertura":
+    from modules.coverage_report import run_coverage
+    run_coverage(df, scope_key)
 
-if "Tipo do componente" in df.columns:
-    tipos_comp = sorted(df["Tipo do componente"].dropna().unique().tolist())
-    tipo_comp_sel = st.sidebar.multiselect("🧩 Tipo do Componente", tipos_comp)
-    if tipo_comp_sel:
-        df = df[df["Tipo do componente"].isin(tipo_comp_sel)]
+elif menu == "🧩 Similaridade (Objetos × Comp & DCN)":
+    from modules.similarity_matrix import run_similarity
+    run_similarity(df, scope_key)
 
-st.sidebar.markdown("---")
-st.sidebar.info(f"📊 {len(df)} registros após aplicação dos filtros.")
+elif menu == "🎯 Alinhamento (Objetivos × Competências)":
+    from modules.alignment_topk import run_alignment
+    run_alignment(df, scope_key)
 
-# ---------------------------------------------------------------
-# 5. MENU PRINCIPAL DE ANÁLISES
-# ---------------------------------------------------------------
-menu = st.sidebar.selectbox(
-    "Selecione a análise:",
-    [
-        "📋 Resumo da Base",
-        "🧩 Cobertura por Competência",
-        "📈 Curva de Bloom Progressiva",
-        "🌐 Convergência Temática",
-        "🔗 Dependência Curricular",
-        "✍️ Sentimento e Clareza Linguística",
-        "🧮 Análise Longitudinal (Versões)"
-    ]
-)
+elif menu == "🧬 Redundância entre UCs":
+    from modules.redundancy_matrix import run_redundancy
+    run_redundancy(df, scope_key)
 
-# ---------------------------------------------------------------
-# 6. EXECUÇÃO DOS MÓDULOS
-# ---------------------------------------------------------------
-if menu == "📋 Resumo da Base":
-    st.header("📋 Resumo da Base Curricular")
-    st.dataframe(df.head(), use_container_width=True)
-    st.success(f"Base carregada com {len(df)} registros e {len(df.columns)} colunas.")
+elif menu == "🔬 Análise Pontual (Frase a Frase)":
+    from modules.redundancy_matrix import run_pair_analysis
+    run_pair_analysis(df, scope_key)
 
-elif menu == "🧩 Cobertura por Competência":
-    from modules.coverage_analysis import coverage_analysis
-    coverage_analysis(df)
+elif menu == "🧠 Mapa de Bloom (Heurística + GPT)":
+    from modules.bloom_analysis import run_bloom
+    run_bloom(df, scope_key)
 
-elif menu == "📈 Curva de Bloom Progressiva":
-    from modules.bloom_progressive import bloom_progressive
-    bloom_progressive(df)
+elif menu == "📈 Clusterização (Ementa)":
+    from modules.clusterization import run_cluster
+    run_cluster(df, scope_key)
 
-elif menu == "🌐 Convergência Temática":
-    from modules.thematic_convergence import thematic_convergence
-    thematic_convergence(df)
+elif menu == "🔗 Sequenciamento / Grafo (GPT)":
+    from modules.dependency_graph import run_graph
+    run_graph(df, scope_key)
 
-elif menu == "🔗 Dependência Curricular":
-    from modules.dependency_graph import dependency_graph
-    dependency_graph(df)
-
-elif menu == "✍️ Sentimento e Clareza Linguística":
-    from modules.sentiment_clarity import sentiment_clarity
-    sentiment_clarity(df)
-
-elif menu == "🧮 Análise Longitudinal (Versões)":
-    from modules.longitudinal_analysis import longitudinal_analysis
-    df_antigo = st.file_uploader("📂 Carregar versão anterior (.xlsx)", type=["xlsx"])
-    if df_antigo:
-        try:
-            df_old = pd.read_excel(df_antigo, engine="openpyxl")
-            longitudinal_analysis(df_old, df)
-        except Exception as e:
-            st.error(f"Erro ao carregar versão anterior: {e}")
+elif menu == "🤖 Relatório Consultivo (GPT)":
+    from modules.consultive_report import run_consultive
+    run_consultive(df, scope_key)
