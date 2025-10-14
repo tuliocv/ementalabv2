@@ -1,6 +1,8 @@
 # ===============================================================
 # 📈 EmentaLabv2 — Clusterização (Ementas) + Nomeação via GPT
+# Versão: v9.4.2 (corrigida e compatível com qualquer sklearn)
 # ===============================================================
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -16,7 +18,25 @@ from utils.exportkit import export_table, show_and_export_fig, export_zip_button
 from utils.text_utils import find_col, replace_semicolons
 
 # ---------------------------------------------------------------
-# Função principal
+# 🧩 Função auxiliar de stopwords seguras
+# ---------------------------------------------------------------
+def build_stopwords():
+    """Gera lista segura e compatível de stopwords PT+EN"""
+    base = list(ENGLISH_STOP_WORDS)
+    extra_pt = [
+        "de", "da", "do", "das", "dos", "para", "por", "com", "a", "o", "e", "em",
+        "como", "ao", "na", "no", "nas", "nos", "sobre", "entre", "pelas", "pelos",
+        "pelo", "pela", "ser", "estar", "ter", "se", "que", "onde", "quando", "uma",
+        "um", "as", "os", "é", "à", "às", "ao", "aos", "já", "também", "ou", "sem",
+        "mesmo", "cada", "todo", "toda", "todas", "todos", "nesta", "neste", "nesse",
+        "nessa", "essas", "esses", "esse", "essa"
+    ]
+    merged = set(str(w).strip().lower() for w in (base + extra_pt)
+                 if isinstance(w, str) and w.strip())
+    return sorted(list(merged))
+
+# ---------------------------------------------------------------
+# 🚀 Função principal de execução
 # ---------------------------------------------------------------
 def run_cluster(df, scope_key):
     # -----------------------------------------------------------
@@ -29,7 +49,8 @@ def run_cluster(df, scope_key):
     st.caption(
         """
         Esta análise agrupa as **Ementas das Unidades Curriculares (UCs)** com base em similaridade semântica.
-        Utiliza **embeddings SBERT** e o algoritmo **K-Means** para revelar **núcleos temáticos** e **áreas de convergência curricular**.
+        Utiliza **embeddings SBERT** e o algoritmo **K-Means** para revelar **núcleos temáticos** e
+        **áreas de convergência curricular**.
         """
     )
 
@@ -101,22 +122,13 @@ def run_cluster(df, scope_key):
         representative_ucs.append(uc_name)
 
     # -----------------------------------------------------------
-    # 🧩 Palavras-chave por cluster (corrigido)
+    # 🧩 Palavras-chave por cluster (versão segura)
     # -----------------------------------------------------------
     st.markdown("### 🧩 Tópicos predominantes por Cluster")
-
-    # ✅ Lista de stopwords compatível com qualquer versão do sklearn
-    base_stopwords = list(ENGLISH_STOP_WORDS)
-    extra_stopwords_pt = [
-        "de", "da", "do", "das", "dos", "para", "por", "com", "a", "o", "e", "em",
-        "como", "ao", "na", "no", "nas", "nos", "sobre", "entre", "pelas", "pelos",
-        "pelo", "pela", "ser", "estar", "ter", "se", "que", "onde", "quando", "uma",
-        "um", "as", "os", "é", "das", "dos", "nas", "nos"
-    ]
-    all_stopwords = base_stopwords + extra_stopwords_pt
+    safe_stopwords = build_stopwords()
 
     vectorizer = CountVectorizer(
-        stop_words=all_stopwords,
+        stop_words=safe_stopwords,
         max_features=1000,
         token_pattern=r"(?u)\b\w\w+\b"
     )
