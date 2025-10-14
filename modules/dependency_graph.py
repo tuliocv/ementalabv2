@@ -135,7 +135,7 @@ def run_graph(df, scope_key, client=None):
     if client is not None:
         with st.spinner("🧠 Gerando análise via GPT..."):
             prompt_lines = [
-                "TAREFA: Identifique relações de PRÉ-REQUISITO (A -> B) entre as Unidades Curriculares listadas.",
+                "Atue como um gestor acadêmico que analisa os planos de ensino. TAREFA: Identifique relações de PRÉ-REQUISITO (A -> B) entre as Unidades Curriculares listadas.",
                 "DEFINIÇÃO: A é pré-requisito de B quando o conteúdo de A é necessário para cursar B.",
                 "FORMATO ESTRITO: A -> B: justificativa curta",
                 "REGRAS:",
