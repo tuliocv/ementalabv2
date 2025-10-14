@@ -1,5 +1,5 @@
 # ===============================================================
-# 🔗 EmentaLabv2 — Grafo de Dependências (v11.0 — compatível com app)
+# 🔗 EmentaLabv2 — Grafo de Dependências (v11.1 — Direcional + Justificativas)
 # ===============================================================
 import re
 import matplotlib.pyplot as plt
@@ -14,7 +14,7 @@ from utils.exportkit import export_table, export_zip_button
 
 
 # ---------------------------------------------------------------
-# 🔍 Extração de relações
+# 🔍 Extração de relações explícitas e justificativas
 # ---------------------------------------------------------------
 def _parse_dependencies_with_reasons(text: str):
     """
@@ -33,7 +33,6 @@ def _parse_dependencies_with_reasons(text: str):
             a, b = a.strip(" .,:;–-"), b.strip(" .,:;–-")
             if a and b and a != b:
                 triples.append((a, b, reason or "—"))
-    # remove duplicados
     seen = set()
     clean = []
     for a, b, r in triples:
@@ -44,10 +43,12 @@ def _parse_dependencies_with_reasons(text: str):
     return clean
 
 
+# ---------------------------------------------------------------
+# 🤖 Fallback SBERT automático (quando GPT não é usado)
+# ---------------------------------------------------------------
 def _infer_semantic_links(df, col_text, n_top=2):
     """
-    Fallback automático com embeddings SBERT (sem GPT).
-    Gera pares A -> B quando há similaridade semântica alta.
+    Gera pares A -> B quando há similaridade semântica alta entre conteúdos.
     """
     nomes = df["Nome da UC"].astype(str).tolist()
     textos = df[col_text].astype(str).tolist()
@@ -67,31 +68,50 @@ def _infer_semantic_links(df, col_text, n_top=2):
 
 
 # ---------------------------------------------------------------
-# 🎨 Desenho do grafo (estático, organizado e legível)
+# 🎨 Desenho do grafo com setas direcionais e justificativas
 # ---------------------------------------------------------------
-def _draw_static_graph(pairs):
-    """Desenha o grafo com layout hierárquico (da esquerda para a direita)."""
+def _draw_static_graph(pairs, show_labels=False):
+    """
+    Desenha o grafo com layout hierárquico da esquerda para a direita,
+    com setas grandes e labels opcionais nas arestas.
+    """
     if not pairs:
         return None
 
     G = nx.DiGraph()
-    for a, b, _ in pairs:
-        G.add_edge(a, b)
+    for a, b, reason in pairs:
+        G.add_edge(a, b, label=reason)
 
-    # Cria layout hierárquico
+    # Layout hierárquico (Graphviz se disponível, fallback = spring)
     try:
-        pos = nx.multipartite_layout(
-            G,
-            subset_key=lambda n: nx.shortest_path_length(G, list(G.nodes)[0], n)
-            if nx.has_path(G, list(G.nodes)[0], n) else 0
-        )
+        pos = nx.nx_agraph.graphviz_layout(G, prog="dot", args="-Grankdir=LR")
     except Exception:
-        pos = nx.spring_layout(G, k=0.5, seed=42)
+        pos = nx.spring_layout(G, k=1.0, seed=42)
 
-    plt.figure(figsize=(12, 8))
-    nx.draw_networkx_nodes(G, pos, node_size=1800, node_color="#a5d8ff", edgecolors="#1c7ed6")
-    nx.draw_networkx_edges(G, pos, arrowstyle="->", arrowsize=18, edge_color="#1c7ed6", width=2, alpha=0.8)
-    nx.draw_networkx_labels(G, pos, font_size=9, font_weight="bold", font_color="#1c1c1c")
+    plt.figure(figsize=(14, 8))
+    nx.draw_networkx_nodes(G, pos, node_size=2500, node_color="#a5d8ff", edgecolors="#1c7ed6", linewidths=1.5)
+
+    # 🔹 Setas direcionais
+    nx.draw_networkx_edges(
+        G, pos,
+        edge_color="#1c7ed6",
+        width=2.2,
+        alpha=0.9,
+        arrows=True,
+        arrowsize=20,
+        arrowstyle="-|>",
+        connectionstyle="arc3,rad=0.05",
+    )
+
+    nx.draw_networkx_labels(G, pos, font_size=9, font_weight="bold", font_color="#0b132b")
+
+    # 🔹 Exibir justificativas sobre as arestas (opcional)
+    if show_labels:
+        edge_labels = nx.get_edge_attributes(G, "label")
+        nx.draw_networkx_edge_labels(
+            G, pos, edge_labels=edge_labels,
+            font_size=7, font_color="#2b2b2b", label_pos=0.55, rotate=False
+        )
 
     plt.title("Mapa de Dependências entre UCs", fontsize=14, fontweight="bold", pad=20)
     plt.axis("off")
@@ -100,7 +120,7 @@ def _draw_static_graph(pairs):
 
 
 # ---------------------------------------------------------------
-# 🚀 Função principal
+# 🚀 Função principal (com client opcional)
 # ---------------------------------------------------------------
 def run_graph(df, scope_key, client=None):
     st.header("🔗 Dependência Curricular")
@@ -125,6 +145,7 @@ def run_graph(df, scope_key, client=None):
     subset = subset.head(max_uc)
 
     use_fallback = st.checkbox("⚙️ Ativar fallback automático SBERT", value=True)
+    show_labels = st.checkbox("💬 Mostrar justificativas no grafo", value=False)
 
     # -----------------------------------------------------------
     # 🧠 Etapa 1 — Inferência GPT (se disponível)
@@ -134,7 +155,7 @@ def run_graph(df, scope_key, client=None):
         with st.spinner("🧠 Gerando análise via GPT..."):
             prompt_lines = [
                 "Você deve identificar relações de pré-requisito entre as Unidades Curriculares (UCs) listadas.",
-                "Responda **somente** no formato 'A -> B: justificativa'.",
+                "Responda somente no formato 'A -> B: justificativa'.",
                 "",
                 "Exemplo:",
                 "Cálculo I -> Cálculo II: Cálculo I fornece as bases matemáticas para Cálculo II.",
@@ -172,7 +193,7 @@ def run_graph(df, scope_key, client=None):
     # 🎨 Etapa 3 — Visualização do Grafo
     # -----------------------------------------------------------
     st.markdown("### 🎨 Mapa de Dependências entre UCs")
-    _draw_static_graph(triples)
+    _draw_static_graph(triples, show_labels=show_labels)
 
     # -----------------------------------------------------------
     # 📊 Etapa 4 — Tabela de Relações
@@ -192,25 +213,26 @@ def run_graph(df, scope_key, client=None):
     c2.metric("Relações identificadas", len(triples))
 
     # -----------------------------------------------------------
-    # 📘 Etapa 6 — Interpretação pedagógica
+    # 📘 Etapa 6 — Interpretação (exibida sempre)
     # -----------------------------------------------------------
-    with st.expander("🧭 Como interpretar o gráfico", expanded=False):
-        st.markdown(
-            """
-            ### 🔹 Leitura do Mapa
-            - Cada **nó** representa uma UC.
-            - Cada **seta** indica uma **relação de dependência** (A → B = A é pré-requisito de B).
-            - O grafo é desenhado da **esquerda para a direita**, mostrando o avanço formativo.
-            - UCs mais à esquerda são **fundamentais**, e as mais à direita **dependem de múltiplas bases**.
+    st.markdown("---")
+    st.subheader("📘 Como interpretar o gráfico")
+    st.markdown(
+        """
+        ### 🔹 Leitura do Mapa
+        - Cada **nó** representa uma Unidade Curricular (UC).
+        - Cada **seta** indica uma **relação de dependência** (A → B = A é pré-requisito de B).
+        - O grafo é desenhado da **esquerda para a direita**, representando o avanço formativo.
+        - UCs mais à esquerda são **fundamentais**, enquanto as mais à direita **dependem de múltiplas bases**.
 
-            ### 🔹 Análises Possíveis
-            - **Coerência vertical**: se as UCs seguem uma sequência lógica de complexidade crescente.
-            - **Lacunas**: UCs isoladas sem ligações (podem indicar desconexões no currículo).
-            - **Densidade de conexões**: alto número de setas indica forte integração interdisciplinar.
+        ### 🔹 Análises Possíveis
+        - **Coerência vertical** → verifica se as UCs seguem uma progressão lógica e cognitiva.
+        - **Lacunas curriculares** → UCs isoladas ou desconectadas podem indicar falta de articulação.
+        - **Densidade de conexões** → número alto de setas sugere integração interdisciplinar.
 
-            ### 🔹 Aplicações Práticas
-            - Verificar se as dependências implícitas estão coerentes com os **pré-requisitos formais**.
-            - Identificar **inconsistências de encadeamento** (ex.: UC avançada sem base clara).
-            - Apoiar revisões de **matrizes curriculares** e **fluxos de aprendizagem**.
-            """
-        )
+        ### 🔹 Aplicações Práticas
+        - Validar **pré-requisitos pedagógicos** entre disciplinas.
+        - Identificar **inconsistências de encadeamento** (UC avançada sem base clara).
+        - Apoiar revisões de **matrizes curriculares**, fluxos de aprendizagem e PPCs.
+        """
+    )
