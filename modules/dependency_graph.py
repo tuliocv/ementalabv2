@@ -90,8 +90,8 @@ def _draw_static_graph(pairs):
 
     plt.figure(figsize=(13, 8))
     nx.draw_networkx_nodes(G, pos, node_size=2000, node_color="#cfe2ff", edgecolors="#084298")
-    nx.draw_networkx_edges(G, pos, arrowstyle="->", arrowsize=18, edge_color="#0d6efd", width=2, alpha=0.8)
-    nx.draw_networkx_labels(G, pos, font_size=6, font_weight="bold", font_color="#1c1c1c")
+    nx.draw_networkx_edges(G, pos, arrowstyle="->", arrowsize=24, edge_color="#0d6efd", width=2, alpha=0.8)
+    nx.draw_networkx_labels(G, pos, font_size=5, font_weight="bold", font_color="#1c1c1c")
     plt.title("Mapa de Dependências entre UCs", fontsize=14, fontweight="bold", pad=20)
     plt.axis("off")
     st.pyplot(plt.gcf(), use_container_width=True)
