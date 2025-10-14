@@ -161,4 +161,24 @@ def run_graph(df: pd.DataFrame, scope_key: str) -> None:
     pairs = pairs_gpt.copy()
 
     if not pairs_gpt and use_fallback:
-        st.warning("⚠️ Nenhuma relação explícita detectada. Usando fall
+        st.warning("⚠️ Nenhuma relação explícita detectada. Usando fallback SBERT…")
+        pairs = _infer_semantic_links(subset, col_obj)
+
+    if not pairs:
+        st.error("❌ Nenhuma relação de pré-requisito foi identificada (nem GPT nem SBERT).")
+        export_zip_button(scope_key)
+        return
+
+    # Visualização e exportação
+    st.subheader("🌐 Grafo de Pré-requisitos")
+    fig = _draw_graph(pairs)
+    st.pyplot(fig)
+
+    df_edges = pd.DataFrame(pairs, columns=["Pré-requisito", "UC Dependente"])
+    export_table(scope_key, df_edges, "grafo_pre_requisitos", "Relações de Pré-requisito")
+    export_zip_button(scope_key)
+
+    # Resumo
+    st.markdown("---")
+    st.metric("Número de UCs analisadas", len(subset))
+    st.metric("Relações identificadas", len(pairs))
