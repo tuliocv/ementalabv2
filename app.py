@@ -1,5 +1,5 @@
 # ===============================================================
-# 🧠 EmentaLabv2 — Inteligência Curricular (v11.0)
+# 🧠 EmentaLabv2 — Inteligência Curricular (v11.1)
 # ===============================================================
 import streamlit as st
 import pandas as pd
@@ -15,24 +15,24 @@ from utils.text_utils import normalize_text
 st.set_page_config(page_title="EmentaLabv2", layout="wide", page_icon="🧠")
 
 # ---------------------------------------------------------------
-# 🎨 Cabeçalho e Identidade
+# 🎨 SIDEBAR — Fluxo guiado por etapas
 # ---------------------------------------------------------------
 logo = Path("assets/logo.png")
 if logo.exists():
-    st.image(str(logo), width=250)
+    st.sidebar.image(str(logo), width=220)
 
-st.title("🧠 EmentaLabv2 — Inteligência Curricular")
-st.markdown("Ferramenta integrada para análise e aprimoramento de matrizes curriculares.")
-st.markdown("---")
+st.sidebar.title("🧠 EmentaLabv2 — Inteligência Curricular")
+st.sidebar.markdown("Ferramenta para análise automatizada de ementas e competências.")
+st.sidebar.markdown("---")
 
-# ---------------------------------------------------------------
-# ETAPA 1️⃣ — Upload do Arquivo
-# ---------------------------------------------------------------
-st.header("📂 Etapa 1 — Carregar Base Curricular")
+# ===============================================================
+# 1️⃣ ETAPA — Upload da Base Curricular
+# ===============================================================
+st.sidebar.subheader("📂 Etapa 1 — Carregar Base Curricular")
+uploaded = st.sidebar.file_uploader("Envie o arquivo (.xlsx ou .csv)", type=["xlsx", "csv"])
 
-uploaded = st.file_uploader("Envie seu arquivo (.xlsx ou .csv)", type=["xlsx", "csv"])
 if not uploaded:
-    st.info("👆 Faça o upload da base curricular para continuar.")
+    st.info("👈 Envie um arquivo Excel ou CSV na lateral para iniciar.")
     st.stop()
 
 try:
@@ -54,73 +54,59 @@ df.columns = (
     .str.strip()
 )
 
-st.success(f"✅ Base carregada com sucesso! ({len(df)} registros) — {sheet_info}")
+st.sidebar.success(f"✅ Base carregada ({len(df)} registros)")
+st.sidebar.caption(f"📄 {uploaded.name} {sheet_info}")
+st.sidebar.markdown("---")
 
-st.markdown("---")
-
-# ---------------------------------------------------------------
-# ETAPA 2️⃣ — Inserir a Chave da API (opcional)
-# ---------------------------------------------------------------
-st.header("🔑 Etapa 2 — Configurar Chave da OpenAI (opcional)")
-st.caption(
-    "Algumas análises utilizam modelos de linguagem (GPT) para aprimorar resultados — "
-    "como Bloom, Dependência Curricular e Relatório Consultivo."
-)
-
-api_key = st.text_input(
-    "Informe sua chave OpenAI (formato: sk-...)", 
+# ===============================================================
+# 2️⃣ ETAPA — Configuração da Chave OpenAI
+# ===============================================================
+st.sidebar.subheader("🔑 Etapa 2 — Chave OpenAI (opcional)")
+api_key = st.sidebar.text_input(
+    "Informe a chave (sk-...)", 
     type="password", 
     placeholder="sk-xxxxxxxxxxxxxxxx"
 )
-
 client = OpenAI(api_key=api_key) if api_key else None
 
 if api_key:
-    st.success("✅ Chave validada com sucesso.")
+    st.sidebar.success("✅ Chave validada com sucesso.")
 else:
-    st.warning("⚠️ Nenhuma chave informada. Recursos com GPT ficarão desativados.")
+    st.sidebar.info("ℹ️ Sem chave: análises GPT ficarão desativadas.")
+st.sidebar.markdown("---")
 
-st.markdown("---")
-
-# ---------------------------------------------------------------
-# ETAPA 3️⃣ — Filtros
-# ---------------------------------------------------------------
-st.header("🎯 Etapa 3 — Aplicar Filtros")
-st.caption("Use os filtros abaixo para segmentar sua análise por curso, modalidade ou tipo de componente.")
+# ===============================================================
+# 3️⃣ ETAPA — Aplicar Filtros
+# ===============================================================
+st.sidebar.subheader("🎯 Etapa 3 — Aplicar Filtros")
 
 filter_cols = ["Nome do curso", "Modalidade do curso", "Tipo Graduação", "Cluster", "Tipo do componente"]
 df_filtered = df.copy()
 active_filters = {}
 
-cols = st.columns(2)
-for i, col in enumerate(filter_cols):
+for col in filter_cols:
     if col in df.columns:
-        options = sorted(df[col].dropna().astype(str).unique())
-        with cols[i % 2]:
-            selected = st.multiselect(col, options, default=[])
-            if selected:
-                df_filtered = df_filtered[df_filtered[col].astype(str).isin(selected)]
-                active_filters[col] = selected
+        values = sorted(df[col].dropna().astype(str).unique())
+        sel = st.sidebar.multiselect(col, values, default=[])
+        if sel:
+            df_filtered = df_filtered[df_filtered[col].astype(str).isin(sel)]
+            active_filters[col] = sel
 
-with st.expander("🔍 Filtros aplicados", expanded=False):
-    if active_filters:
-        for k, v in active_filters.items():
-            st.write(f"**{k}:** {', '.join(map(str, v))}")
-    else:
-        st.caption("Nenhum filtro aplicado. Todos os registros serão considerados.")
+if active_filters:
+    st.sidebar.success(f"🎯 {len(active_filters)} filtros aplicados")
+else:
+    st.sidebar.info("Nenhum filtro aplicado (todas as UCs incluídas).")
 
-st.info(f"📊 Total de registros filtrados: **{len(df_filtered)}**")
+st.sidebar.caption(f"📊 Registros filtrados: {len(df_filtered)}")
+st.sidebar.markdown("---")
 
-st.markdown("---")
+# ===============================================================
+# 4️⃣ ETAPA — Seleção do Tipo de Análise
+# ===============================================================
+st.sidebar.subheader("📈 Etapa 4 — Escolher Tipo de Análise")
 
-# ---------------------------------------------------------------
-# ETAPA 4️⃣ — Seleção da Análise
-# ---------------------------------------------------------------
-st.header("📈 Etapa 4 — Escolher Tipo de Análise")
-st.caption("Selecione o tipo de análise que deseja executar sobre a base curricular.")
-
-menu = st.selectbox(
-    "Escolha uma análise para executar:",
+menu = st.sidebar.selectbox(
+    "Selecione uma análise:",
     [
         "📊 Resumo Geral",
         "✅ Cobertura Curricular",
@@ -136,14 +122,26 @@ menu = st.selectbox(
     index=0
 )
 
-# inicializa escopo de exportação
+# Inicializa diretório de exportação
 scope_key = normalize_text(menu).replace(" ", "_")
 _init_exports(scope_key)
 
+# ---------------------------------------------------------------
+# CONTEÚDO PRINCIPAL — Cabeçalho e Filtros Ativos
+# ---------------------------------------------------------------
+st.markdown("## 🧩 EmentaLabv2 — Painel de Análise")
+st.caption("Analise e explore relações entre ementas, objetivos, competências e coerência curricular.")
 st.markdown("---")
 
+with st.expander("🔍 Filtros aplicados", expanded=False):
+    if active_filters:
+        for k, v in active_filters.items():
+            st.write(f"**{k}:** {', '.join(map(str, v))}")
+    else:
+        st.caption("Nenhum filtro aplicado.")
+
 # ---------------------------------------------------------------
-# 🚀 Execução da Análise Selecionada
+# EXECUÇÃO DAS ANÁLISES
 # ---------------------------------------------------------------
 if menu == "📊 Resumo Geral":
     from modules.summary_dashboard import run_summary
