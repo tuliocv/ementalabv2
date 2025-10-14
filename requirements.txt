@@ -1,0 +1,12 @@
+streamlit>=1.38
+pandas
+numpy
+sentence-transformers
+openai
+seaborn
+matplotlib
+scikit-learn
+networkx
+textblob
+spacy
+pdfplumber
