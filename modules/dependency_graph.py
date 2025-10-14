@@ -1,159 +1,154 @@
-# ementalabv2/modules/dependency_graph.py
 # ===============================================================
-# Sequenciamento / Grafo (GPT + Visual) — versão limpa (Py3.10)
+# 🔗 EmentaLabv2 — Grafo de Dependências Curriculares (v8.3)
 # ===============================================================
 from __future__ import annotations
-
 import re
 from typing import List, Tuple
-
-import matplotlib.pyplot as plt
-import networkx as nx
-import pandas as pd
 import streamlit as st
-
-try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None  # Deixa mensagem amigável se lib não existir
-
+import pandas as pd
+import networkx as nx
+import matplotlib.pyplot as plt
+from openai import OpenAI
 from utils.text_utils import find_col, truncate
 from utils.exportkit import export_zip_button, export_table
+from utils.embeddings import sbert_embed, l2_normalize
+import numpy as np
 
 
+# ---------------------------------------------------------------
+# 1. Função auxiliar — parser textual
+# ---------------------------------------------------------------
 def _parse_dependencies(text: str) -> List[Tuple[str, str]]:
-    """
-    Extrai pares (A -> B) de pré-requisito a partir do texto do GPT.
-    Padrões suportados (case-insensitive):
-      - 'X é pré-requisito de Y'
-      - 'X é pré requisito para Y'
-      - 'Y depende de X'
-      - '- X -> Y' (flecha)
-    Retorna lista de tuplas (pre_req, dependente).
-    """
-    pairs: List[Tuple[str, str]] = []
+    """Extrai pares 'A -> B' ou frases equivalentes."""
+    pairs = []
     if not text:
         return pairs
 
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     for ln in lines:
-        # 1) X é pré-requisito de/para Y
-        m1 = re.findall(
-            r"(.+?)\s+(?:e|é|são)?\s*pré[\-\s]?requisito[s]?\s+(?:de|para)\s+(.+)",
+        match_arrow = re.findall(r"(.+?)\s*[-–>]{1,2}\s*(.+)", ln)
+        match_words = re.findall(
+            r"(.+?)\s+(?:é|são)\s*pré[\-\s]?requisito[s]?\s+(?:de|para)\s+(.+)",
             ln,
             flags=re.IGNORECASE,
         )
-        # 2) Y depende de X
-        m2 = re.findall(
-            r"(.+?)\s+depende\s+(?:de|do)\s+(.+)",
-            ln,
-            flags=re.IGNORECASE,
+        match_depends = re.findall(
+            r"(.+?)\s+depende\s+(?:de|do)\s+(.+)", ln, flags=re.IGNORECASE
         )
-        # 3) Lista com flecha: X -> Y
-        m3 = re.findall(
-            r"^\-?\s*([^:\-–>]+?)\s*[-–>]{1,2}\s*(.+)$",  # suporta '-', '->', '–>'
-            ln,
-            flags=re.IGNORECASE,
-        )
-
-        for a, b in (m1 + [(b, a) for (b, a) in m2] + m3):
-            a = a.strip(" .,:;–-")
-            b = b.strip(" .,:;–-")
+        for a, b in match_arrow + match_words + match_depends:
+            a, b = a.strip(" .,:;–-"), b.strip(" .,:;–-")
             if a and b and a != b:
-                # Evita linhas gigantes/ruído
-                if len(a) <= 120 and len(b) <= 120:
-                    pairs.append((a, b))
+                pairs.append((a, b))
 
-    # Dedup
+    # Remover duplicatas
     seen = set()
-    out = []
+    clean = []
     for a, b in pairs:
         key = (a.lower(), b.lower())
         if key not in seen:
             seen.add(key)
-            out.append((a, b))
-    return out
+            clean.append((a, b))
+    return clean
 
 
+# ---------------------------------------------------------------
+# 2. Fallback SBERT — gera dependências por similaridade
+# ---------------------------------------------------------------
+def _infer_semantic_links(df: pd.DataFrame, col_text: str, n_top: int = 2) -> List[Tuple[str, str]]:
+    """Cria pares de pré-requisito prováveis com base em similaridade SBERT."""
+    nomes = df["Nome da UC"].astype(str).tolist()
+    textos = df[col_text].astype(str).tolist()
+    if len(textos) < 2:
+        return []
+
+    emb = l2_normalize(sbert_embed(textos))
+    sims = np.dot(emb, emb.T)
+
+    pairs = []
+    for i, nome_a in enumerate(nomes):
+        idx_sorted = np.argsort(-sims[i])
+        for j in idx_sorted[1 : n_top + 1]:
+            if sims[i, j] > 0.45:  # limiar semântico
+                pairs.append((nome_a, nomes[j]))
+    # remove duplicatas e reflexivos
+    pairs = list({(a, b) for a, b in pairs if a != b})
+    return pairs
+
+
+# ---------------------------------------------------------------
+# 3. Desenha grafo
+# ---------------------------------------------------------------
 def _draw_graph(pairs: List[Tuple[str, str]]) -> plt.Figure:
-    """Desenha grafo simples com NetworkX e Matplotlib."""
     G = nx.DiGraph()
     G.add_edges_from(pairs)
-
-    # Layout
     pos = nx.spring_layout(G, seed=42, k=0.8)
 
-    fig, ax = plt.subplots(figsize=(9, 6))
+    fig, ax = plt.subplots(figsize=(10, 7))
     nx.draw_networkx_nodes(G, pos, node_color="#a5d8ff", node_size=1600, alpha=0.95, ax=ax)
     nx.draw_networkx_edges(G, pos, edge_color="#3b5bdb", arrows=True, arrowsize=18, width=2.0, ax=ax)
     nx.draw_networkx_labels(G, pos, font_size=9, font_weight="bold", font_color="#111", ax=ax)
-
     ax.set_axis_off()
     fig.tight_layout()
     return fig
 
 
+# ---------------------------------------------------------------
+# 4. Função principal
+# ---------------------------------------------------------------
 def run_graph(df: pd.DataFrame, scope_key: str) -> None:
-    """
-    Entrada principal do módulo (chamada pelo app).
-    - Usa GPT para gerar um diagnóstico textual das dependências.
-    - Faz parsing do texto para pares A->B.
-    - Gera grafo e permite exportar CSV/ZIP.
-    """
     st.header("🔗 Dependência Curricular — Relações de Pré-requisito entre UCs")
     st.caption(
         "Identifica precedências entre UCs com base nos conteúdos programáticos. "
-        "Gera uma leitura textual via GPT e, em seguida, um grafo dirigido."
+        "Usa GPT para inferência textual e SBERT como fallback semântico."
     )
 
-    # Verifica coluna de objetos/conteúdo
+    # Localiza coluna de conteúdo
     col_obj = find_col(df, "Objetos de conhecimento") or find_col(df, "Conteúdo programático")
     if not col_obj:
-        st.error("Coluna de 'Objetos de conhecimento' (ou 'Conteúdo programático') não encontrada.")
+        st.error("Coluna 'Objetos de conhecimento' (ou 'Conteúdo programático') não encontrada.")
         return
 
-    # Subconjunto (para evitar prompts gigantes)
+    # Subconjunto de UCs
     subset = df[["Nome da UC", col_obj]].dropna()
     if subset.empty:
-        st.warning("Não há UCs válidas com 'Objetos de conhecimento' preenchidos.")
+        st.warning("Nenhuma UC com 'Objetos de conhecimento' preenchido.")
         return
 
     max_uc = st.slider(
-        "Quantidade de UCs a considerar no prompt (amostra)",
+        "Quantidade de UCs a considerar (amostra para análise GPT)",
         min_value=4,
         max_value=min(40, len(subset)),
         value=min(12, len(subset)),
         step=1,
     )
-    subset = subset.head(max_uc).copy()
+    subset = subset.head(max_uc)
 
-    # API Key
+    # Chave API
     api_key = st.text_input("🔑 OpenAI API Key", type="password")
+    use_fallback = st.checkbox("⚙️ Ativar fallback automático por similaridade SBERT", value=True)
     if not api_key:
-        st.info("Informe a OpenAI API Key para prosseguir.")
-        return
-    if OpenAI is None:
-        st.error("Pacote 'openai' não está instalado. Adicione 'openai' ao requirements.txt.")
+        st.info("Informe a OpenAI API Key para executar a análise GPT.")
         return
 
-    # Prompt
+    client = OpenAI(api_key=api_key)
+
+    # Prompt mais direto
     prompt_lines = [
-        "Analise as UCs abaixo e identifique as relações de pré-requisito entre elas.",
-        "Ao listar, use frases simples como:",
-        "- X é pré-requisito de Y",
-        "- Y depende de X",
-        "Se fizer sentido, você também pode usar 'X -> Y'.",
+        "Você deve OBRIGATORIAMENTE indicar relações diretas de pré-requisito entre as UCs listadas.",
+        "Responda APENAS no formato 'A -> B', onde A é pré-requisito de B.",
+        "Não descreva as UCs individualmente. Se não houver relação, ignore a UC.",
+        "",
+        "Exemplo:",
+        "- Expressão e Linguagens Visuais -> Meios de Representação",
+        "- Meios de Representação -> Projeto de Ambientes e Interiores Residenciais",
         "",
         "UCs (nome: objetos de conhecimento):",
     ]
     for _, r in subset.iterrows():
-        prompt_lines.append(f"- {r['Nome da UC']}: {truncate(str(r[col_obj]).replace(';', ', '), 700)}")
-
+        prompt_lines.append(f"- {r['Nome da UC']}: {truncate(str(r[col_obj]), 600)}")
     prompt = "\n".join(prompt_lines)
 
-    # Chamada ao modelo
-    client = OpenAI(api_key=api_key)
-    with st.spinner("Consultando o modelo GPT..."):
+    with st.spinner("🧠 Gerando análise via GPT..."):
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
@@ -162,26 +157,35 @@ def run_graph(df: pd.DataFrame, scope_key: str) -> None:
     content = (resp.choices[0].message.content or "").strip()
 
     st.subheader("📄 Saída textual do modelo (para auditoria)")
-    st.text_area("Diagnóstico do modelo", value=content, height=260)
+    st.text_area("Diagnóstico do modelo", value=content, height=250)
 
-    # Parsing de dependências
-    pairs_all = _parse_dependencies(content)
+    # -----------------------------------------------------------
+    # Parsing do texto
+    # -----------------------------------------------------------
+    pairs_gpt = _parse_dependencies(content)
+    pairs = pairs_gpt.copy()
 
-    # Filtro: manter apenas UCs presentes no subset (para evitar nomes “fantasma”)
-    uc_names = set(subset["Nome da UC"].astype(str))
-    pairs = [(a, b) for (a, b) in pairs_all if a in uc_names and b in uc_names]
+    if not pairs_gpt and use_fallback:
+        st.warning("⚠️ Nenhuma relação explícita detectada. Usando fallback SBERT…")
+        pairs = _infer_semantic_links(subset, col_obj)
 
     if not pairs:
-        st.warning("Nenhum padrão de pré-requisito foi identificado na resposta do GPT.")
+        st.error("❌ Nenhuma relação de pré-requisito foi identificada (nem pelo GPT nem por similaridade).")
         export_zip_button(scope_key)
         return
 
-    # Visualização + Export
-    st.subheader("🌐 Grafo de Pré-requisitos (A → B)")
+    # -----------------------------------------------------------
+    # Visualização e exportação
+    # -----------------------------------------------------------
+    st.subheader("🌐 Grafo de Pré-requisitos")
     fig = _draw_graph(pairs)
     st.pyplot(fig)
 
     df_edges = pd.DataFrame(pairs, columns=["Pré-requisito", "UC Dependente"])
-    export_table(scope_key, df_edges, "grafo_pre_requisitos", "Relacoes_Pre_Requisitos")
-
+    export_table(scope_key, df_edges, "grafo_pre_requisitos", "Relações de Pré-requisito")
     export_zip_button(scope_key)
+
+    # Resumo numérico
+    st.markdown("---")
+    st.metric("Número de UCs analisadas", len(subset))
+    st.metric("Relações identificadas", len(pairs))
