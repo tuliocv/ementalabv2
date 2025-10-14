@@ -21,7 +21,7 @@ from utils.text_utils import find_col, replace_semicolons
 # -------------- Helpers -----------------
 
 def _clean_corpus(textos: list[str]) -> list[str]:
-    """Limpa e padroniza os textos para TF-IDF (sem parâmetros inválidos)."""
+    """Limpa e padroniza os textos."""
     out = []
     for t in textos:
         s = str(t)
@@ -32,7 +32,7 @@ def _clean_corpus(textos: list[str]) -> list[str]:
 
 def _tfidf_top_keywords_per_cluster(textos: list[str], labels: np.ndarray, top_k: int = 8) -> pd.DataFrame:
     """
-    Retorna um DataFrame com palavras-chave TF-IDF por cluster.
+    Retorna um DataFrame com palavras-chave por cluster.
     Usa parâmetros compatíveis com sklearn 1.4+ (evita InvalidParameterError).
     """
     if len(textos) == 0:
@@ -326,17 +326,33 @@ def run_cluster(df: pd.DataFrame, scope_key: str):
     st.dataframe(df_full, use_container_width=True, height=480)
     export_table(scope_key, df_full, "cluster_consolidado", "UCs e Clusters Consolidados")
 
-    # --------- Export ZIP geral ---------
-    st.markdown("### 📦 Centro de Downloads (Clusterização)")
-    export_zip_button(scope_key)
-
-    # Dicas de leitura
+     # -----------------------------------------------------------
+    # 📘 Interpretação pedagógica
+    # -----------------------------------------------------------
+    st.markdown("---")
+    st.subheader("📘 Como interpretar os resultados")
     st.markdown(
         """
-        🔍 **Interpretação**  
-        - Cada ponto é uma **UC** (identificada por **UC_ID**).  
-        - A legenda mostra o **nome do cluster** (por representante ou pelo GPT, se acionado).  
-        - **Palavras-chave** ajudam a entender o tema predominante de cada grupo.  
-        - Use a **tabela consolidada** para localizar rapidamente a UC no gráfico (via UC_ID).
+        **1️⃣ Significado dos clusters:**
+        - Cada grupo reúne UCs com **ementas semanticamente semelhantes**.
+        - UCs próximas compartilham **conteúdos, abordagens e competências** similares.
+
+        **2️⃣ Interpretação prática:**
+        - Clusters grandes indicam **núcleos formativos amplos** (ex.: Matemática, Programação, Gestão).  
+        - Clusters pequenos podem sinalizar **especializações** ou **redundâncias curriculares**.  
+        - A UC representativa indica **a disciplina mais central** dentro do tema.
+
+        **3️⃣ Uso com GPT:**
+        - O nome sugerido pelo GPT ajuda a **etiquetar os núcleos temáticos** de forma interpretável.
+        - Ideal para relatórios de análise curricular, consolidação de PPCs e reuniões de NDE.
+
+        **4️⃣ Comparativo pós-GPT:**
+        - O gráfico final evidencia como o GPT reorganizou semanticamente os clusters,
+          ajudando a alinhar estatísticas a significados pedagógicos.
+
+        **5️⃣ Aplicações práticas:**
+        - Diagnóstico de **redundância e sobreposição curricular**.
+        - Identificação de **áreas interdisciplinares** emergentes.
+        - Planejamento de **integração entre clusters correlatos**.
         """
     )
