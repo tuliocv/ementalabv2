@@ -1,33 +1,14 @@
-# ==========================================================
-# EmentaLabv2 — Requisitos (versão estável para Streamlit Cloud)
-# ==========================================================
-
-# Interface principal
-streamlit==1.38.0
-streamlit-pyvis==1.2.2
-
-# Processamento de dados
-pandas==2.2.3
-numpy==1.26.4
-openpyxl==3.1.5
-
-# Machine Learning e NLP
-scikit-learn==1.5.2
-sentence-transformers==3.2.0
-spacy==3.7.5
-textblob==0.18.0.post0
-
-# Visualização
-matplotlib==3.9.2
-seaborn==0.13.2
-pyvis==0.3.2
-networkx==3.3
-
-# Processamento de texto e PDF
-pdfplumber==0.11.4
-
-# API OpenAI
-openai==1.47.0
-
-# Utilitários
-tqdm==4.66.5
+streamlit>=1.38 
+pandas 
+numpy 
+sentence-transformers 
+openai 
+seaborn 
+matplotlib 
+scikit-learn 
+networkx 
+textblob 
+spacy 
+pdfplumber 
+openpyxl>=3.1.0 
+pyvis 
