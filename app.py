@@ -5,6 +5,13 @@ from pathlib import Path
 from utils.exportkit import _init_exports, export_zip_button
 from utils.text_utils import normalize_text
 
+from modules.dependency_graph_interactive import run_graph_interactive
+
+# Dentro da escolha de análises:
+elif analise == "Grafo Interativo (PyVis)":
+    run_graph_interactive(df, scope_key)
+
+
 # Configuração de página
 st.set_page_config(page_title="EmentaLabv2", layout="wide", page_icon="🧠")
 
