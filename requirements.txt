@@ -10,3 +10,4 @@ networkx
 textblob
 spacy
 pdfplumber
+openpyxl>=3.1.0
