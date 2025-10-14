@@ -1,18 +1,18 @@
 # ===============================================================
-# 🔗 EmentaLabv2 — Grafo de Dependências Curriculares (v8.3)
+# 🔗 EmentaLabv2 — Grafo Interativo de Dependências (v8.4)
 # ===============================================================
-from __future__ import annotations
 import re
 from typing import List, Tuple
 import streamlit as st
 import pandas as pd
-import networkx as nx
-import matplotlib.pyplot as plt
+import numpy as np
 from openai import OpenAI
 from utils.text_utils import find_col, truncate
-from utils.exportkit import export_zip_button, export_table
+from utils.exportkit import export_table, export_zip_button
 from utils.embeddings import sbert_embed, l2_normalize
-import numpy as np
+from pyvis.network import Network
+import tempfile
+import os
 
 
 # ---------------------------------------------------------------
@@ -55,7 +55,7 @@ def _parse_dependencies(text: str) -> List[Tuple[str, str]]:
 # 2. Fallback SBERT — gera dependências por similaridade
 # ---------------------------------------------------------------
 def _infer_semantic_links(df: pd.DataFrame, col_text: str, n_top: int = 2) -> List[Tuple[str, str]]:
-    """Cria pares de pré-requisito prováveis com base em similaridade SBERT."""
+    """Cria pares prováveis com base em similaridade SBERT."""
     nomes = df["Nome da UC"].astype(str).tolist()
     textos = df[col_text].astype(str).tolist()
     if len(textos) < 2:
@@ -76,30 +76,35 @@ def _infer_semantic_links(df: pd.DataFrame, col_text: str, n_top: int = 2) -> Li
 
 
 # ---------------------------------------------------------------
-# 3. Desenha grafo
+# 3. Grafo interativo com PyVis
 # ---------------------------------------------------------------
-def _draw_graph(pairs: List[Tuple[str, str]]) -> plt.Figure:
-    G = nx.DiGraph()
-    G.add_edges_from(pairs)
-    pos = nx.spring_layout(G, seed=42, k=0.8)
+def _draw_interactive_graph(pairs: List[Tuple[str, str]]) -> str:
+    """Gera grafo interativo e retorna caminho HTML temporário."""
+    nt = Network(height="650px", width="100%", directed=True, bgcolor="#ffffff", font_color="#222222")
+    nt.barnes_hut(gravity=-20000, central_gravity=0.3, spring_length=150, spring_strength=0.02)
 
-    fig, ax = plt.subplots(figsize=(10, 7))
-    nx.draw_networkx_nodes(G, pos, node_color="#a5d8ff", node_size=1600, alpha=0.95, ax=ax)
-    nx.draw_networkx_edges(G, pos, edge_color="#3b5bdb", arrows=True, arrowsize=18, width=2.0, ax=ax)
-    nx.draw_networkx_labels(G, pos, font_size=9, font_weight="bold", font_color="#111", ax=ax)
-    ax.set_axis_off()
-    fig.tight_layout()
-    return fig
+    nodes = set()
+    for a, b in pairs:
+        nodes.update([a, b])
+        nt.add_node(a, label=a, color="#a5d8ff")
+        nt.add_node(b, label=b, color="#74c0fc")
+        nt.add_edge(a, b, color="#1c7ed6", arrowStrikethrough=False)
+
+    nt.repulsion(node_distance=180, spring_length=150)
+
+    tmp_path = os.path.join(tempfile.gettempdir(), "grafo_interativo.html")
+    nt.save_graph(tmp_path)
+    return tmp_path
 
 
 # ---------------------------------------------------------------
 # 4. Função principal
 # ---------------------------------------------------------------
-def run_graph(df: pd.DataFrame, scope_key: str) -> None:
-    st.header("🔗 Dependência Curricular — Relações de Pré-requisito entre UCs")
+def run_graph_interactive(df: pd.DataFrame, scope_key: str):
+    st.header("🌐 Grafo Interativo — Relações de Pré-requisito entre UCs")
     st.caption(
         "Identifica precedências entre UCs com base nos conteúdos programáticos. "
-        "Usa GPT para inferência textual e SBERT como fallback semântico."
+        "Usa GPT para inferência textual e SBERT como fallback semântico, exibindo grafo interativo em HTML."
     )
 
     # Localiza coluna de conteúdo
@@ -108,14 +113,13 @@ def run_graph(df: pd.DataFrame, scope_key: str) -> None:
         st.error("Coluna 'Objetos de conhecimento' (ou 'Conteúdo programático') não encontrada.")
         return
 
-    # Subconjunto de UCs
     subset = df[["Nome da UC", col_obj]].dropna()
     if subset.empty:
         st.warning("Nenhuma UC com 'Objetos de conhecimento' preenchido.")
         return
 
     max_uc = st.slider(
-        "Quantidade de UCs a considerar (amostra para análise GPT)",
+        "Quantidade de UCs a considerar (amostra GPT)",
         min_value=4,
         max_value=min(40, len(subset)),
         value=min(12, len(subset)),
@@ -123,7 +127,6 @@ def run_graph(df: pd.DataFrame, scope_key: str) -> None:
     )
     subset = subset.head(max_uc)
 
-    # Chave API
     api_key = st.text_input("🔑 OpenAI API Key", type="password")
     use_fallback = st.checkbox("⚙️ Ativar fallback automático por similaridade SBERT", value=True)
     if not api_key:
@@ -132,7 +135,7 @@ def run_graph(df: pd.DataFrame, scope_key: str) -> None:
 
     client = OpenAI(api_key=api_key)
 
-    # Prompt mais direto
+    # Prompt aprimorado
     prompt_lines = [
         "Você deve OBRIGATORIAMENTE indicar relações diretas de pré-requisito entre as UCs listadas.",
         "Responda APENAS no formato 'A -> B', onde A é pré-requisito de B.",
@@ -159,33 +162,31 @@ def run_graph(df: pd.DataFrame, scope_key: str) -> None:
     st.subheader("📄 Saída textual do modelo (para auditoria)")
     st.text_area("Diagnóstico do modelo", value=content, height=250)
 
-    # -----------------------------------------------------------
-    # Parsing do texto
-    # -----------------------------------------------------------
+    # Parsing
     pairs_gpt = _parse_dependencies(content)
     pairs = pairs_gpt.copy()
 
-    if not pairs_gpt and use_fallback:
+    if not pairs and use_fallback:
         st.warning("⚠️ Nenhuma relação explícita detectada. Usando fallback SBERT…")
         pairs = _infer_semantic_links(subset, col_obj)
 
     if not pairs:
-        st.error("❌ Nenhuma relação de pré-requisito foi identificada (nem pelo GPT nem por similaridade).")
+        st.error("❌ Nenhuma relação identificada (nem GPT nem SBERT).")
         export_zip_button(scope_key)
         return
 
-    # -----------------------------------------------------------
-    # Visualização e exportação
-    # -----------------------------------------------------------
-    st.subheader("🌐 Grafo de Pré-requisitos")
-    fig = _draw_graph(pairs)
-    st.pyplot(fig)
+    # Grafo interativo
+    html_path = _draw_interactive_graph(pairs)
+    with open(html_path, "r", encoding="utf-8") as f:
+        html = f.read()
 
+    st.components.v1.html(html, height=700, scrolling=True)
+
+    # Exportação
     df_edges = pd.DataFrame(pairs, columns=["Pré-requisito", "UC Dependente"])
-    export_table(scope_key, df_edges, "grafo_pre_requisitos", "Relações de Pré-requisito")
+    export_table(scope_key, df_edges, "grafo_interativo_pre_requisitos", "Relações Pré-requisito (Interativo)")
     export_zip_button(scope_key)
 
-    # Resumo numérico
     st.markdown("---")
-    st.metric("Número de UCs analisadas", len(subset))
+    st.metric("UCs analisadas", len(subset))
     st.metric("Relações identificadas", len(pairs))
