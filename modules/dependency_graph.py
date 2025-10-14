@@ -141,6 +141,7 @@ def run_graph(df, scope_key, client=None):
                 "REGRAS:",
                 "- Use apenas o formato acima, sem texto adicional.",
                 "- Evite repetições e relações triviais.",
+                "- Seja crítico na justificativa e análise.",
                 "",
                 "EXEMPLO:",
                 "Fundamentos de Cálculo -> Cálculo I: fornece base conceitual para derivadas.",
