@@ -1,15 +1,11 @@
 # ===============================================================
-# 🧠 EmentaLabv2 — Inteligência Curricular (v10.6)
+# 🧠 EmentaLabv2 — Inteligência Curricular (v10.5)
 # ===============================================================
 import streamlit as st
 import pandas as pd
 from pathlib import Path
 from openai import OpenAI
-from importlib import reload
 
-# 🔁 Recarrega módulo exportkit (evita cache de versões antigas)
-import utils.exportkit as exportkit
-reload(exportkit)
 from utils.exportkit import _init_exports, export_zip_button
 from utils.text_utils import normalize_text
 
@@ -28,7 +24,7 @@ if logo.exists():
 st.sidebar.title("🧠 EmentaLabv2 — Inteligência Curricular")
 st.sidebar.markdown("---")
 
-# 🔑 API key global (usada por módulos que utilizam GPT)
+# 🔑 API key global (usada por módulos com GPT)
 st.sidebar.subheader("🔑 Configurações")
 api_key = st.sidebar.text_input(
     "OpenAI API Key (opcional)",
@@ -92,7 +88,7 @@ for col in filter_cols:
             active_filters[col] = sel
 
 # ---------------------------------------------------------------
-# 🧭 Menu de Análises
+# 🧭 Menu de Análises (nomes institucionais)
 # ---------------------------------------------------------------
 menu = st.sidebar.selectbox(
     "Tipo de análise",
@@ -111,7 +107,7 @@ menu = st.sidebar.selectbox(
     index=0
 )
 
-# ✅ Define escopo e inicializa exportações corretamente
+# define escopo e inicializa exportações
 scope_key = normalize_text(menu).replace(" ", "_")
 _init_exports(scope_key)
 
