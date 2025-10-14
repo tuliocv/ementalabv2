@@ -1,12 +1,11 @@
 # ===============================================================
-# 🔗 EmentaLabv2 — Grafo de Dependências (v11.6 — robusto, explicativo e analítico)
+# 🔗 EmentaLabv2 — Grafo de Dependências (v11.7 — Relatório Analítico Objetivo)
 # ===============================================================
 # - Prompt GPT mais robusto e reprodutível
+# - Relatório analítico objetivo e direto (pontos fortes, fracos e ações)
 # - Mantém “Como interpretar o gráfico” sempre visível
-# - Explica claramente o que são “UC (Pré-requisito)” e “UC Dependente”
-# - Mostra para cada UC quais são seus antecessores (pré-requisitos)
-# - Solicita relatório analítico do GPT com pontos fortes, fracos e sugestões
-# - Compatível com a arquitetura do app (usa scope_key, exportkit, etc.)
+# - Mostra UCs dependentes e antecessores
+# - Compatível com o app principal
 # ===============================================================
 
 import re
@@ -26,10 +25,7 @@ from utils.exportkit import export_table, export_zip_button
 # 🔍 Extração de relações
 # ---------------------------------------------------------------
 def _parse_dependencies_with_reasons(text: str):
-    """
-    Extrai pares 'A -> B: justificativa' (justificativa opcional).
-    Exemplo: "A -> B: porque A fornece base teórica para B"
-    """
+    """Extrai pares 'A -> B' e justificativas (quando houver)."""
     if not text:
         return []
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -42,7 +38,6 @@ def _parse_dependencies_with_reasons(text: str):
             a, b = a.strip(" .,:;–-"), b.strip(" .,:;–-")
             if a and b and a != b:
                 triples.append((a, b, reason or "—"))
-    # Remove duplicados
     seen = set()
     clean = []
     for a, b, r in triples:
@@ -54,10 +49,7 @@ def _parse_dependencies_with_reasons(text: str):
 
 
 def _infer_semantic_links(df, col_text, n_top=2):
-    """
-    Fallback automático com embeddings SBERT (sem GPT).
-    Gera pares A -> B quando há similaridade semântica alta.
-    """
+    """Fallback SBERT para casos sem GPT."""
     nomes = df["Nome da UC"].astype(str).tolist()
     textos = df[col_text].astype(str).tolist()
     if len(textos) < 2:
@@ -112,8 +104,8 @@ def _draw_static_graph(pairs):
 def run_graph(df, scope_key, client=None):
     st.header("🔗 Dependência Curricular")
     st.caption(
-        "Identifica relações de **precedência e interdependência** entre as UCs (Unidades Curriculares), "
-        "com base na análise semântica dos conteúdos. "
+        "Identifica relações de **precedência e interdependência** entre as Unidades Curriculares (UCs), "
+        "a partir dos **objetos de conhecimento** ou **conteúdos programáticos**. "
         "Cada seta indica uma relação de **pré-requisito** (A → B)."
     )
 
@@ -138,29 +130,27 @@ def run_graph(df, scope_key, client=None):
     triples = []
 
     # -----------------------------------------------------------
-    # 🧠 Etapa 1 — Inferência GPT (com prompt robusto)
+    # 🧠 Etapa 1 — Inferência GPT (prompt robusto)
     # -----------------------------------------------------------
     if client is not None:
         with st.spinner("🧠 Gerando análise via GPT..."):
             prompt_lines = [
-                "TAREFA: Identificar relações de PRÉ-REQUISITO (A -> B) entre as Unidades Curriculares (UCs) abaixo.",
-                "DEFINIÇÃO: A é pré-requisito de B quando o conteúdo de A é necessário para compreender ou cursar B.",
-                "FORMATO ESTRITO DE RESPOSTA: Cada linha deve conter uma relação no formato:",
-                "A -> B: justificativa breve",
-                "",
+                "TAREFA: Identifique relações de PRÉ-REQUISITO (A -> B) entre as Unidades Curriculares listadas.",
+                "DEFINIÇÃO: A é pré-requisito de B quando o conteúdo de A é necessário para cursar B.",
+                "FORMATO ESTRITO: A -> B: justificativa curta",
                 "REGRAS:",
-                "- Responder apenas com pares A -> B e justificativa, sem explicações adicionais.",
-                "- Não repetir relações.",
-                "- Evitar relações triviais ou baseadas apenas em semelhança de nomes.",
+                "- Use apenas o formato acima, sem texto adicional.",
+                "- Evite repetições e relações triviais.",
                 "",
                 "EXEMPLO:",
-                "Fundamentos de Cálculo -> Cálculo I: fornece base conceitual de limites e derivadas.",
-                "Cálculo I -> Cálculo II: desenvolve conceitos de integração a partir de derivadas.",
+                "Fundamentos de Cálculo -> Cálculo I: fornece base conceitual para derivadas.",
+                "Cálculo I -> Cálculo II: base para integração e funções compostas.",
                 "",
                 "LISTA DE UCS:",
             ]
             for _, r in subset.iterrows():
                 prompt_lines.append(f"- {r['Nome da UC']}: {truncate(str(r[col_obj]), 600)}")
+
             prompt = "\n".join(prompt_lines)
 
             try:
@@ -175,11 +165,11 @@ def run_graph(df, scope_key, client=None):
                 triples = _parse_dependencies_with_reasons(content)
 
                 if not triples:
-                    st.warning("⚠️ GPT não retornou pares válidos, tentando inferência regex livre...")
+                    st.warning("⚠️ GPT não retornou pares válidos, tentando regex…")
                     pattern = re.findall(r"([A-ZÁÉÍÓÚÂÊÔÃÕÇa-z0-9 ,\-()]+)\s*[-–>]{1,2}\s*([A-ZÁÉÍÓÚÂÊÔÃÕÇa-z0-9 ,\-()]+)", content)
                     if pattern:
-                        triples = [(a.strip(), b.strip(), "Inferido de resposta textual") for a, b in pattern]
-                        st.info("⚙️ Relações inferidas automaticamente do texto livre.")
+                        triples = [(a.strip(), b.strip(), "Inferido do texto livre") for a, b in pattern]
+                        st.info("⚙️ Relações inferidas automaticamente.")
             except Exception as e:
                 st.warning(f"❌ Falha na análise via GPT: {e}")
 
@@ -208,13 +198,12 @@ def run_graph(df, scope_key, client=None):
     st.markdown("### 📘 Relações Identificadas")
     st.write(
         """
-        - **UC (Pré-requisito)**: Unidade Curricular que fornece base para outra.
-        - **UC (Dependente)**: Unidade que exige o conhecimento prévio da anterior.
+        - **UC (Pré-requisito):** Unidade Curricular que fornece base para outra.
+        - **UC (Dependente):** Unidade que exige o conhecimento prévio da anterior.
         """
     )
-
     st.dataframe(df_edges, use_container_width=True, hide_index=True)
-    export_table(scope_key, df_edges, "grafo_dependencias", "Relações de Dependência entre UCs")
+    export_table(scope_key, df_edges, "grafo_dependencias", "Relações de Dependência")
 
     # -----------------------------------------------------------
     # 🔁 Etapa 5 — Antecessores por UC
@@ -232,13 +221,13 @@ def run_graph(df, scope_key, client=None):
     # -----------------------------------------------------------
     # 📈 Etapa 6 — Métricas
     # -----------------------------------------------------------
-    st.markdown("### 📈 Métricas de Análise")
+    st.markdown("### 📈 Métricas Gerais")
     c1, c2 = st.columns(2)
     c1.metric("UCs analisadas", len(subset))
     c2.metric("Relações identificadas", len(triples))
 
     # -----------------------------------------------------------
-    # 🧭 Etapa 7 — Interpretação pedagógica (sempre visível)
+    # 🧭 Etapa 7 — Interpretação
     # -----------------------------------------------------------
     st.markdown("---")
     st.markdown(
@@ -246,43 +235,36 @@ def run_graph(df, scope_key, client=None):
         ## 🧭 Como interpretar o gráfico
         - Cada **nó** representa uma Unidade Curricular (UC).
         - Cada **seta** indica uma **relação de dependência** (A → B = A é pré-requisito de B).
-        - O grafo é desenhado da **esquerda para a direita**, mostrando o avanço formativo.
-        - UCs à esquerda são **fundamentais**, e as à direita **dependem de múltiplas bases**.
-
-        **Análises possíveis:**
-        - **Coerência vertical:** se as UCs seguem progressão lógica de complexidade.
-        - **UCs isoladas:** sem ligações (podem indicar desconexões curriculares).
-        - **Densidade de conexões:** número de setas reflete o grau de integração interdisciplinar.
-
-        **Aplicações práticas:**
-        - Revisar se dependências inferidas coincidem com os **pré-requisitos formais** do PPC.
-        - Identificar **lacunas ou redundâncias** na estrutura curricular.
-        - Planejar **ajustes na sequência de oferta** das UCs.
+        - UCs à esquerda são **bases estruturantes**; UCs à direita dependem dessas fundações.
+        - UCs isoladas podem representar **disciplinas autônomas ou desconectadas**.
         """
     )
 
     # -----------------------------------------------------------
-    # 🧩 Etapa 8 — Relatório analítico do GPT (Pontos fortes, fracos e melhorias)
+    # 🧾 Etapa 8 — Relatório Analítico Objetivo
     # -----------------------------------------------------------
     if client is not None:
-        with st.spinner("📝 Gerando relatório analítico dos resultados..."):
+        with st.spinner("📝 Gerando relatório analítico da estrutura curricular..."):
             try:
                 resumo_prompt = (
                     "Com base nas seguintes relações de dependência entre UCs:\n\n"
                     + "\n".join([f"{a} -> {b}: {r}" for a, b, r in triples[:60]]) +
-                    "\n\nGere um relatório analítico destacando:\n"
-                    "- Pontos fortes da estrutura curricular;\n"
-                    "- Pontos fracos ou incoerências observadas;\n"
-                    "- Recomendações e sugestões de melhoria;\n"
-                    "O texto deve ser conciso, técnico e organizado em tópicos."
+                    "\n\nElabore um **relatório analítico objetivo** com no máximo 200 palavras, estruturado assim:\n\n"
+                    "### Pontos Fortes\n"
+                    "- (2 a 4 itens curtos e diretos)\n"
+                    "### Pontos Fracos\n"
+                    "- (2 a 4 itens curtos e diretos)\n"
+                    "### Ações Recomendadas\n"
+                    "- (2 a 4 recomendações práticas e assertivas para melhoria da coerência curricular)\n"
+                    "Evite redundâncias e linguagem genérica."
                 )
                 resp = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[{"role": "user", "content": resumo_prompt}],
-                    temperature=0.3,
+                    temperature=0.2,
                 )
                 analise_texto = (resp.choices[0].message.content or "").strip()
-                st.markdown("### 🧾 Relatório Analítico (Gerado via GPT)")
+                st.markdown("### 🧾 Relatório Analítico da Estrutura Curricular")
                 st.markdown(analise_texto)
             except Exception as e:
                 st.warning(f"Não foi possível gerar o relatório analítico: {e}")
