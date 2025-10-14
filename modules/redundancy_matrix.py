@@ -1,5 +1,5 @@
 # ===============================================================
-# 🧬 EmentaLabv2 — Similaridade, Redundância e Alinhamento (v11.2)
+# 🧬 EmentaLabv2 — Similaridade, Redundância e Alinhamento (v11.3)
 # ===============================================================
 # Inclui:
 # - 🔁 run_redundancy: redundância entre UCs (global)
@@ -23,16 +23,21 @@ from utils.text_utils import find_col, replace_semicolons, _split_sentences
 # ===============================================================
 # 🧩 Função auxiliar para formatação segura
 # ===============================================================
-def safe_format(df, decimals=2, cmap="YlGnBu"):
-    """Converte colunas numéricas e aplica estilo visual seguro."""
+def safe_style(df, decimals=2, cmap="YlGnBu"):
+    """
+    Garante que apenas colunas numéricas sejam formatadas.
+    Evita erro 'Unknown format code f for object of type str'.
+    """
     df_fmt = df.copy()
-    for c in df_fmt.columns[1:]:
-        df_fmt[c] = pd.to_numeric(df_fmt[c], errors="coerce")
-    return (
-        df_fmt.style
-        .format(f"{{:.{decimals}f}}")
-        .background_gradient(cmap=cmap, vmin=0, vmax=1)
-    )
+    # converte todas as colunas (exceto a primeira, geralmente UC)
+    for c in df_fmt.columns:
+        if c != df_fmt.columns[0]:
+            df_fmt[c] = pd.to_numeric(df_fmt[c], errors="coerce")
+    # aplica formatação apenas às numéricas
+    fmt_dict = {
+        c: f"{{:.{decimals}f}}" for c in df_fmt.columns if pd.api.types.is_numeric_dtype(df_fmt[c])
+    }
+    return df_fmt.style.format(fmt_dict).background_gradient(cmap=cmap, vmin=0, vmax=1)
 
 
 # ===============================================================
@@ -64,10 +69,7 @@ def run_redundancy(df, scope_key):
     df_mat = pd.DataFrame(S, index=nomes, columns=nomes)
     st.markdown("### 🧮 Matriz de Similaridade Global")
 
-    st.dataframe(
-        safe_format(df_mat.head(30), 2, "RdYlGn_r"),
-        use_container_width=True,
-    )
+    st.dataframe(safe_style(df_mat.head(30), 2, "RdYlGn_r"), use_container_width=True)
     export_table(scope_key, df_mat, "redundancia_matriz", "Matriz de Similaridade entre UCs")
 
     thr = st.slider("Limiar de redundância (similaridade mínima)", 0.5, 0.95, 0.8, 0.05)
@@ -80,7 +82,7 @@ def run_redundancy(df, scope_key):
     if pares:
         df_pares = pd.DataFrame(pares).sort_values("Similaridade", ascending=False)
         st.markdown("### 🔗 Pares de UCs com alta similaridade")
-        st.dataframe(safe_format(df_pares, 3, "YlOrRd"), use_container_width=True)
+        st.dataframe(safe_style(df_pares, 3, "YlOrRd"), use_container_width=True)
         export_table(scope_key, df_pares, "redundancia_pares", "UCs com alta similaridade")
 
         fig, ax = plt.subplots(figsize=(7, 4))
@@ -148,7 +150,7 @@ def run_pair_analysis(df, scope_key):
     df_out = pd.DataFrame(rows).sort_values("Similaridade", ascending=False)
 
     st.markdown("### 🧩 Trechos mais semelhantes")
-    st.dataframe(safe_format(df_out, 3, "PuBu"), use_container_width=True)
+    st.dataframe(safe_style(df_out, 3, "PuBu"), use_container_width=True)
     export_table(scope_key, df_out, f"redundancia_{uc_a}_vs_{uc_b}", f"Redundância Frase a Frase: {uc_a} vs {uc_b}")
     export_zip_button(scope_key)
 
@@ -209,10 +211,10 @@ def run_alignment_matrix(df, scope_key, client=None):
         df_res[label] = vals
 
     st.markdown("### 📈 Similaridade entre Dimensões")
-    st.dataframe(safe_format(df_res, 2, "YlGnBu"), use_container_width=True)
+    st.dataframe(safe_style(df_res, 2, "YlGnBu"), use_container_width=True)
     export_table(scope_key, df_res, "matriz_objetos_competencias", "Matriz Objetos × Competências/DCN")
 
-    # 🔹 Gráfico
+    # 🔹 Heatmap
     fig, ax = plt.subplots(figsize=(8, 5))
     sns.heatmap(df_res.set_index("UC"), annot=True, cmap="YlGnBu", fmt=".2f", linewidths=0.5, ax=ax)
     ax.set_title("Matriz de Similaridade (Objetos × Competências / DCN)")
@@ -235,7 +237,7 @@ def run_alignment_matrix(df, scope_key, client=None):
         resumo = {
             "media_egresso": float(df_res["Objetos × Competências Egresso"].mean()) if "Objetos × Competências Egresso" in df_res else None,
             "media_dcn": float(df_res["Objetos × Competências DCN"].mean()) if "Objetos × Competências DCN" in df_res else None,
-            "ucs_baixas": df_res[df_res.iloc[:, 1:].mean(axis=1) < 0.65]["UC"].tolist()
+            "ucs_baixas": df_res[df_res.iloc[:, 1:].apply(pd.to_numeric, errors='coerce').mean(axis=1) < 0.65]["UC"].tolist()
         }
         prompt = f"""
         Você é um avaliador curricular. Analise os seguintes dados:
