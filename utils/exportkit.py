@@ -1,11 +1,14 @@
 # ===============================================================
-# 💾 EmentaLabv2 — ExportKit Utilitário (v11.5)
+# 💾 EmentaLabv2 — ExportKit Utilitário (v11.6)
 # ===============================================================
-# Solução final contra StreamlitDuplicateElementKey
+# 🔹 Solução final contra StreamlitDuplicateElementKey
+# 🔹 Adicionada compatibilidade retroativa com get_docx_bytes()
+# 🔹 Log opcional de exportações (arquivos incluídos no ZIP)
 # ---------------------------------------------------------------
-# ✅ "Baixar Resultados" único por escopo, sem duplicar na tela
+# ✅ "Baixar Resultados" único por escopo
 # ✅ Identificador interno aleatório (garante unicidade)
 # ✅ Compatível com múltiplos módulos e Streamlit Cloud
+# ✅ Inclui suporte a .docx (para módulos legados)
 # ===============================================================
 
 import os
@@ -31,10 +34,10 @@ def _init_exports(scope_key: str = "default"):
 
 
 # ---------------------------------------------------------------
-# 🧹 Limpa diretórios antigos
+# 🧹 Limpa diretórios antigos (mais de 12h)
 # ---------------------------------------------------------------
 def _cleanup_old_exports(base_tmp):
-    """Remove pastas antigas com mais de 12h."""
+    """Remove pastas antigas de exportação."""
     import time
     now = time.time()
     for f in os.listdir(base_tmp):
@@ -53,7 +56,7 @@ def _cleanup_old_exports(base_tmp):
 # 💾 Exporta DataFrame como Excel/CSV
 # ---------------------------------------------------------------
 def export_table(scope_key: str, df: pd.DataFrame, filename: str, title: str = "Tabela"):
-    """Salva DataFrame como Excel ou CSV."""
+    """Salva DataFrame como Excel ou CSV no diretório de exportação."""
     if df is None or df.empty:
         st.warning(f"⚠️ Nenhum dado disponível para exportar ({title}).")
         return
@@ -73,44 +76,52 @@ def export_table(scope_key: str, df: pd.DataFrame, filename: str, title: str = "
 # 🖼️ Exporta e exibe figuras do matplotlib
 # ---------------------------------------------------------------
 def show_and_export_fig(scope_key: str, fig: plt.Figure, filename: str, show=True):
-    """Mostra o gráfico no Streamlit e salva PNG."""
+    """Mostra o gráfico e salva como PNG."""
     export_dir = _init_exports(scope_key)
     png_path = os.path.join(export_dir, f"{filename}.png")
-    fig.savefig(png_path, bbox_inches="tight", dpi=300)
-    if show:
-        st.pyplot(fig, use_container_width=True)
-        st.caption(f"📁 Figura salva: `{filename}.png`")
+
+    try:
+        fig.savefig(png_path, bbox_inches="tight", dpi=300)
+        if show:
+            st.pyplot(fig, use_container_width=True)
+            st.caption(f"📁 Figura salva: `{filename}.png`")
+    except Exception as e:
+        st.error(f"❌ Erro ao exportar figura: {e}")
 
 
 # ---------------------------------------------------------------
-# 📦 Gera botão de download .zip (único visualmente)
+# 📦 Gera botão de download .zip (único por escopo)
 # ---------------------------------------------------------------
 def export_zip_button(scope_key: str):
     """
     Gera um botão fixo "Baixar Resultados".
-    Garante unicidade mesmo com múltiplas chamadas simultâneas.
+    Evita duplicações e cria chave única a cada render.
     """
     export_dir = _init_exports(scope_key)
 
-    # 🔸 verifica se botão já foi exibido neste render
+    # 🔸 Evita botões duplicados
     if "_shown_buttons" not in st.session_state:
         st.session_state["_shown_buttons"] = set()
     if scope_key in st.session_state["_shown_buttons"]:
         return
     st.session_state["_shown_buttons"].add(scope_key)
 
-    # 🔸 gera conteúdo ZIP
+    # 🔸 Gera o ZIP
     zip_buffer = io.BytesIO()
+    added_files = []
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
         for root, _, files in os.walk(export_dir):
             for f in files:
-                zipf.write(os.path.join(root, f), arcname=f)
+                full_path = os.path.join(root, f)
+                zipf.write(full_path, arcname=f)
+                added_files.append(f)
     zip_buffer.seek(0)
 
-    # 🔸 gera key única, sem repetição
-    unique_key = f"dl_{scope_key}_{uuid.uuid4().hex[:6]}"
+    # 🔸 Log opcional no console
+    print(f"[EmentaLabv2][ExportKit] Arquivos exportados ({scope_key}): {', '.join(added_files)}")
 
-    # 🔸 exibe botão fixo (único por escopo)
+    # 🔸 Cria botão único com key randômica
+    unique_key = f"dl_{scope_key}_{uuid.uuid4().hex[:6]}"
     st.download_button(
         label="⬇️ Baixar Resultados",
         data=zip_buffer,
@@ -138,9 +149,37 @@ def clear_exports(scope_key: str = "default"):
 # 🧮 Exporta múltiplas figuras
 # ---------------------------------------------------------------
 def export_multiple_figs(scope_key: str, figs: dict):
-    """Exporta várias figuras para o diretório temporário."""
+    """Exporta várias figuras simultaneamente."""
     export_dir = _init_exports(scope_key)
+    count = 0
     for name, fig in figs.items():
-        path = os.path.join(export_dir, f"{name}.png")
-        fig.savefig(path, bbox_inches="tight", dpi=300)
-    st.success(f"📦 {len(figs)} figuras exportadas em {export_dir}")
+        try:
+            path = os.path.join(export_dir, f"{name}.png")
+            fig.savefig(path, bbox_inches="tight", dpi=300)
+            count += 1
+        except Exception as e:
+            st.error(f"❌ Erro ao salvar figura '{name}': {e}")
+    st.success(f"📦 {count} figuras exportadas para {export_dir}")
+
+
+# ---------------------------------------------------------------
+# 🧾 Compatibilidade retroativa — exportação DOCX
+# ---------------------------------------------------------------
+from io import BytesIO
+
+def get_docx_bytes(document):
+    """
+    Compatibilidade com módulos antigos (EmentaLabv1).
+    Converte um objeto `docx.Document` em bytes prontos para download.
+    Exemplo:
+        buffer = get_docx_bytes(doc)
+        st.download_button("Baixar DOCX", data=buffer, file_name="relatorio.docx")
+    """
+    bio = BytesIO()
+    try:
+        document.save(bio)
+        bio.seek(0)
+        return bio.getvalue()
+    except Exception as e:
+        st.error(f"❌ Erro ao gerar arquivo DOCX: {e}")
+        return None
