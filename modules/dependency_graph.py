@@ -1,25 +1,45 @@
 # ===============================================================
-# 🔗 EmentaLabv2 — Grafo de Dependências (v11.2 — Hierárquico + Tabelas Agrupadas)
+# 🔗 EmentaLabv2 — Grafo de Dependências (v11.3 — Estático + Análise)
 # ===============================================================
+# - Extrai relações A -> B + justificativas do GPT (opcional)
+# - Fallback SBERT quando GPT não retorna relações
+# - Desenha grafo estático hierárquico (menos sobreposição)
+# - Gera tabelas amigáveis (pré-requisitos por UC e “esta UC prepara para”)
+# - Produz análise interpretativa automática (pontos fortes e fracos)
+# - Exporta figuras e tabelas em ZIP do escopo
+# ===============================================================
+
+from __future__ import annotations
 import re
+from typing import List, Tuple, Dict
+import numpy as np
+import pandas as pd
+import streamlit as st
 import matplotlib.pyplot as plt
 import networkx as nx
-import pandas as pd
-import numpy as np
-import streamlit as st
 
+# GPT (opcional)
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None  # para evitar import error em ambientes sem openai
+
+# Utils do projeto
 from utils.text_utils import find_col, truncate
 from utils.embeddings import sbert_embed, l2_normalize
-from utils.exportkit import export_table, export_zip_button
+from utils.exportkit import export_table, show_and_export_fig, export_zip_button
 
 
 # ---------------------------------------------------------------
-# 🔍 Extração de relações explícitas e justificativas
+# 🔍 Parsers e heurísticas
 # ---------------------------------------------------------------
-def _parse_dependencies_with_reasons(text: str):
+def _parse_dependencies_with_reasons(text: str) -> List[Tuple[str, str, str]]:
     """
-    Extrai pares 'A -> B' e justificativas (quando houver).
-    Exemplo: "A -> B: porque A fornece base teórica para B"
+    Extrai pares 'A -> B: justificativa' (justificativa opcional).
+    Linhas válidas:
+      - A -> B
+      - A -> B: porque ...
+      - A –> B: ...
     """
     if not text:
         return []
@@ -27,12 +47,14 @@ def _parse_dependencies_with_reasons(text: str):
     triples = []
     pattern = re.compile(r"(.+?)\s*[-–>]{1,2}\s*(.+?)(?::\s*(.+))?$")
     for ln in lines:
-        match = pattern.match(ln)
-        if match:
-            a, b, reason = match.groups()
-            a, b = a.strip(" .,:;–-"), b.strip(" .,:;–-")
-            if a and b and a != b:
-                triples.append((a, b, reason or "—"))
+        m = pattern.match(ln)
+        if not m:
+            continue
+        a, b, reason = m.groups()
+        a, b = a.strip(" .,:;–-"), b.strip(" .,:;–-")
+        if a and b and a != b:
+            triples.append((a, b, (reason or "—").strip()))
+    # de-duplicação simples
     seen = set()
     clean = []
     for a, b, r in triples:
@@ -43,13 +65,8 @@ def _parse_dependencies_with_reasons(text: str):
     return clean
 
 
-# ---------------------------------------------------------------
-# 🤖 Fallback SBERT automático (quando GPT não é usado)
-# ---------------------------------------------------------------
-def _infer_semantic_links(df, col_text, n_top=2):
-    """
-    Gera pares A -> B quando há similaridade semântica alta entre conteúdos.
-    """
+def _infer_semantic_links(df: pd.DataFrame, col_text: str, n_top: int = 2, thr: float = 0.45) -> List[Tuple[str, str, str]]:
+    """Fallback com SBERT: cria pares prováveis com pequena justificativa baseada em similaridade."""
     nomes = df["Nome da UC"].astype(str).tolist()
     textos = df[col_text].astype(str).tolist()
     if len(textos) < 2:
@@ -60,212 +77,297 @@ def _infer_semantic_links(df, col_text, n_top=2):
     for i, nome_a in enumerate(nomes):
         idx_sorted = np.argsort(-sims[i])
         for j in idx_sorted[1:n_top + 1]:
-            if sims[i, j] > 0.45:
-                reason = f"Similaridade semântica de {sims[i, j]:.2f} entre conteúdos de {nome_a} e {nomes[j]}"
+            if sims[i, j] > thr:
+                reason = f"Similaridade semântica {sims[i,j]:.2f} entre conteúdos de '{nome_a}' e '{nomes[j]}'"
                 triples.append((nome_a, nomes[j], reason))
+    # remover auto-loops/duplicados
     triples = list({(a, b, r) for a, b, r in triples if a != b})
     return triples
 
 
 # ---------------------------------------------------------------
-# 🎨 Desenho do grafo com setas direcionais e justificativas
+# 📐 Layout hierárquico estável
 # ---------------------------------------------------------------
-def _draw_static_graph(pairs, show_labels=False):
+def _compute_layers(pairs: List[Tuple[str, str, str]]) -> Dict[str, int]:
     """
-    Desenha o grafo com layout hierárquico da esquerda para a direita,
-    com setas grandes e labels opcionais nas arestas.
+    Atribui camadas (níveis) para cada nó com base em pré-requisitos:
+      - nós sem pré-requisito direto ficam na camada 0;
+      - destino recebe camada >= (max(camadas de seus pré) + 1).
+    Se houver ciclos, aplica camadas aproximadas por indegree BFS.
     """
-    if not pairs:
+    G = nx.DiGraph()
+    for a, b, _ in pairs:
+        G.add_edge(a, b)
+
+    # tenta topological layering
+    levels = {}
+    try:
+        order = list(nx.topological_sort(G))
+        for node in order:
+            preds = list(G.predecessors(node))
+            if not preds:
+                levels[node] = 0
+            else:
+                levels[node] = max(levels[p] for p in preds) + 1
+        return levels
+    except Exception:
+        # fallback (grafos com ciclo): BFS por indegree
+        indeg = dict(G.in_degree())
+        q = [n for n, d in indeg.items() if d == 0]
+        levels = {n: 0 for n in q}
+        visited = set(q)
+        while q:
+            cur = q.pop(0)
+            for nxt in G.successors(cur):
+                if nxt not in visited:
+                    levels[nxt] = max(levels.get(nxt, 0), levels[cur] + 1)
+                    q.append(nxt)
+                    visited.add(nxt)
+        # nós restantes (cíclicos) → última camada conhecida + 1
+        max_layer = max(levels.values()) if levels else 0
+        for n in G.nodes:
+            if n not in levels:
+                levels[n] = max_layer + 1
+        return levels
+
+
+def _layout_by_layers(levels: Dict[str, int], G: nx.DiGraph) -> Dict[str, tuple]:
+    """
+    Constrói posições (x, y) usando camadas em Y e nós espaçados em X.
+    Garante margens e ordenação estável.
+    """
+    # agrupa por camada
+    by_layer = {}
+    for n, l in levels.items():
+        by_layer.setdefault(l, []).append(n)
+
+    # ordena alfabeticamente dentro da camada para estabilidade
+    for l in by_layer:
+        by_layer[l].sort()
+
+    # parâmetros de layout
+    layer_gap_y = 1.8
+    node_gap_x = 1.4
+
+    pos = {}
+    for layer, nodes in by_layer.items():
+        width = (len(nodes) - 1) * node_gap_x
+        start_x = -width / 2.0
+        y = -layer * layer_gap_y
+        for i, n in enumerate(nodes):
+            pos[n] = (start_x + i * node_gap_x, y)
+    return pos
+
+
+def _draw_static_graph(triples: List[Tuple[str, str, str]], title: str = "Mapa de Dependências entre UCs"):
+    """Desenha o grafo (estático) com layout hierárquico calculado."""
+    if not triples:
         return None
 
     G = nx.DiGraph()
-    for a, b, reason in pairs:
-        G.add_edge(a, b, label=reason)
+    for a, b, _ in triples:
+        G.add_edge(a, b)
 
-    # Layout hierárquico (Graphviz se disponível, fallback = spring)
-    try:
-        pos = nx.nx_agraph.graphviz_layout(G, prog="dot", args="-Grankdir=LR")
-    except Exception:
-        pos = nx.spring_layout(G, k=1.0, seed=42)
+    # camadas & layout
+    levels = _compute_layers(triples)
+    pos = _layout_by_layers(levels, G)
 
-    plt.figure(figsize=(14, 8))
-    nx.draw_networkx_nodes(G, pos, node_size=2500, node_color="#a5d8ff", edgecolors="#1c7ed6", linewidths=1.5)
+    fig, ax = plt.subplots(figsize=(12, 8))
+    nx.draw_networkx_nodes(G, pos, node_size=1800, node_color="#E3F2FD", edgecolors="#1976D2", linewidths=1.2, ax=ax)
+    nx.draw_networkx_edges(G, pos, arrowstyle="->", arrowsize=18, edge_color="#1976D2", width=2.0, alpha=0.85, ax=ax)
+    nx.draw_networkx_labels(G, pos, font_size=9, font_weight="bold", font_color="#1c1c1c", ax=ax)
 
-    # 🔹 Setas direcionais
-    nx.draw_networkx_edges(
-        G, pos,
-        edge_color="#1c7ed6",
-        width=2.2,
-        alpha=0.9,
-        arrows=True,
-        arrowsize=20,
-        arrowstyle="-|>",
-        connectionstyle="arc3,rad=0.05",
-    )
-
-    nx.draw_networkx_labels(G, pos, font_size=9, font_weight="bold", font_color="#0b132b")
-
-    # 🔹 Exibir justificativas sobre as arestas (opcional)
-    if show_labels:
-        edge_labels = nx.get_edge_attributes(G, "label")
-        nx.draw_networkx_edge_labels(
-            G, pos, edge_labels=edge_labels,
-            font_size=7, font_color="#2b2b2b", label_pos=0.55, rotate=False
-        )
-
-    plt.title("Mapa de Dependências entre UCs", fontsize=14, fontweight="bold", pad=20)
-    plt.axis("off")
-    st.pyplot(plt.gcf(), use_container_width=True)
-    plt.close()
+    ax.set_title(title, fontsize=14, fontweight="bold", pad=16)
+    ax.axis("off")
+    return fig, levels
 
 
 # ---------------------------------------------------------------
-# 🚀 Função principal (com client opcional)
+# 🧾 Análise interpretativa automática
 # ---------------------------------------------------------------
-def run_graph(df, scope_key, client=None):
+def _analysis_text(triples: List[Tuple[str, str, str]]) -> str:
+    if not triples:
+        return "Não foram identificadas relações de pré-requisito."
+
+    df_edges = pd.DataFrame(triples, columns=["UC_Base", "UC_Destino", "Justificativa"])
+    todas_ucs = sorted(set(df_edges["UC_Base"]).union(set(df_edges["UC_Destino"])))
+
+    deps_por_base = df_edges.groupby("UC_Base")["UC_Destino"].nunique()
+    bases_por_dest = df_edges.groupby("UC_Destino")["UC_Base"].nunique()
+
+    uc_influente = deps_por_base.idxmax() if not deps_por_base.empty else None
+    uc_dependente = bases_por_dest.idxmax() if not bases_por_dest.empty else None
+
+    isoladas = [uc for uc in todas_ucs if uc not in deps_por_base.index and uc not in bases_por_dest.index]
+
+    n = len(todas_ucs)
+    m = len(df_edges)
+    densidade = m / (n * (n - 1)) if n > 1 else 0.0
+
+    parts = []
+    parts.append(f"A análise identificou **{m} relações** entre **{n} UCs**, com densidade média de **{densidade:.2f}** no grafo.")
+
+    if uc_influente:
+        parts.append(f"A UC **{uc_influente}** destaca-se como **base estruturante** (fornece fundamentos para várias outras).")
+
+    if uc_dependente:
+        parts.append(f"A UC **{uc_dependente}** apresenta **alta interdependência**, exigindo múltiplos pré-requisitos.")
+
+    if isoladas:
+        parts.append(f"Foram encontradas **{len(isoladas)} UCs isoladas** (sem conexões diretas): {', '.join(isoladas)}.")
+
+    if densidade > 0.35:
+        parts.append("O alto índice de conexões sugere **forte articulação curricular** e progressão consistente.")
+    elif densidade > 0.15:
+        parts.append("Há **equilíbrio** entre autonomia e integração das UCs, com boa coerência vertical.")
+    else:
+        parts.append("A **baixa densidade** indica possível **fragmentação** e oportunidades de reforçar vínculos entre UCs.")
+
+    parts.append("Recomenda-se revisar os encadeamentos nas UCs isoladas e verificar se as justificativas de pré-requisito refletem **competências e objetos** previstos no PPC.")
+
+    return "\n\n".join(f"✅ {p}" for p in parts)
+
+
+# ---------------------------------------------------------------
+# 🚀 Função principal (assinatura usada no app: run_graph(df, scope_key))
+# ---------------------------------------------------------------
+def run_graph(df: pd.DataFrame, scope_key: str):
     st.header("🔗 Dependência Curricular")
     st.caption(
-        "Identifica relações de precedência e interdependência entre UCs com base em inferência semântica."
+        "Identifica relações de **pré-requisito (A → B)** e interdependência entre UCs a partir dos "
+        "**Objetos de Conhecimento / Conteúdos Programáticos**. "
+        "Você pode usar **GPT** para justificar as ligações ou ativar o **fallback semântico (SBERT)**."
     )
 
-    # -----------------------------------------------------------
-    # 🧱 Identificação da coluna base
-    # -----------------------------------------------------------
     col_obj = find_col(df, "Objetos de conhecimento") or find_col(df, "Conteúdo programático")
     if not col_obj:
         st.error("Coluna 'Objetos de conhecimento' (ou 'Conteúdo programático') não encontrada.")
         return
 
-    subset = df[["Nome da UC", col_obj]].dropna()
-    if subset.empty:
+    base = df[["Nome da UC", col_obj]].dropna().copy()
+    if base.empty:
         st.warning("Nenhuma UC com 'Objetos de conhecimento' preenchido.")
         return
 
-    max_uc = st.slider("Quantidade de UCs (amostra para análise)", 4, min(40, len(subset)), min(12, len(subset)), 1)
-    subset = subset.head(max_uc)
+    # Amostragem (para prompts mais leves)
+    max_uc = st.slider("Quantidade de UCs a considerar (amostra)", 4, min(50, len(base)), min(14, len(base)), 1)
+    subset = base.head(max_uc).reset_index(drop=True)
 
-    use_fallback = st.checkbox("⚙️ Ativar fallback automático SBERT", value=True)
-    show_labels = st.checkbox("💬 Mostrar justificativas no grafo", value=False)
+    # Chave (tenta reaproveitar global; senão, campo local)
+    api_key = st.session_state.get("global_api_key", "")
+    api_key = st.text_input("🔑 OpenAI API Key (opcional para justificativas GPT)", value=api_key, type="password")
+    if api_key:
+        st.session_state["global_api_key"] = api_key
 
-    # -----------------------------------------------------------
-    # 🧠 Etapa 1 — Inferência GPT (se disponível)
-    # -----------------------------------------------------------
-    triples = []
-    if client is not None:
-        with st.spinner("🧠 Gerando análise via GPT..."):
+    use_fallback = st.checkbox("⚙️ Ativar fallback automático SBERT (se GPT não retornar ligações)", value=True)
+
+    triples: List[Tuple[str, str, str]] = []
+
+    # ---------------- GPT (opcional) ----------------
+    if api_key and OpenAI is not None:
+        try:
+            client = OpenAI(api_key=api_key)
+            # prompt compacto e formatado
             prompt_lines = [
-                "Você deve identificar relações de pré-requisito entre as Unidades Curriculares (UCs) listadas.",
-                "Responda somente no formato 'A -> B: justificativa'.",
+                "TAREFA: indique **apenas** relações de pré-requisito **diretas** entre as UCs a seguir.",
+                "FORMATO OBRIGATÓRIO (uma por linha): A -> B: justificativa curta",
+                "Regra: A é pré-requisito de B quando o conteúdo de A é necessário para cursar B.",
                 "",
-                "Exemplo:",
-                "Cálculo I -> Cálculo II: Cálculo I fornece as bases matemáticas para Cálculo II.",
+                "EXEMPLO:",
+                "Expressão e Linguagens Visuais -> Meios de Representação: fundamentos visuais para representação técnica",
+                "Fundamentos de Cálculo -> Cálculo I: base conceitual de limites e derivadas",
                 "",
-                "UCs (nome: objetos de conhecimento):",
+                "UCs (nome: objetos/conteúdos):",
             ]
             for _, r in subset.iterrows():
                 prompt_lines.append(f"- {r['Nome da UC']}: {truncate(str(r[col_obj]), 600)}")
             prompt = "\n".join(prompt_lines)
 
-            try:
+            with st.spinner("🧠 Analisando com GPT..."):
                 resp = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[{"role": "user", "content": prompt}],
-                    temperature=0.1,
+                    temperature=0.0,
                 )
-                content = (resp.choices[0].message.content or "").strip()
-                triples = _parse_dependencies_with_reasons(content)
-            except Exception as e:
-                st.warning(f"❌ Falha na análise via GPT: {e}")
+            content = (resp.choices[0].message.content or "").strip()
+            st.markdown("### 📄 Saída do Modelo (para auditoria)")
+            st.text_area("Retorno do GPT", value=content, height=220)
+            triples = _parse_dependencies_with_reasons(content)
+        except Exception as e:
+            st.error(f"❌ Falha ao consultar GPT: {e}")
 
-    # -----------------------------------------------------------
-    # 🧩 Etapa 2 — Fallback SBERT
-    # -----------------------------------------------------------
+    # ---------------- Fallback SBERT ----------------
     if not triples and use_fallback:
-        st.warning("⚠️ Nenhuma relação explícita detectada. Usando fallback SBERT…")
-        triples = _infer_semantic_links(subset, col_obj)
+        st.warning("⚠️ Nenhuma ligação explícita do GPT. Aplicando fallback SBERT…")
+        triples = _infer_semantic_links(subset, col_obj, n_top=2, thr=0.45)
 
     if not triples:
         st.error("❌ Nenhuma relação identificada (nem GPT nem SBERT).")
         export_zip_button(scope_key)
         return
 
-    # -----------------------------------------------------------
-    # 🎨 Etapa 3 — Visualização do Grafo
-    # -----------------------------------------------------------
-    st.markdown("### 🎨 Mapa de Dependências entre UCs")
-    _draw_static_graph(triples, show_labels=show_labels)
+    # ---------------- Gráfico ----------------
+    st.markdown("### 🎨 Mapa de Dependências (A → B)")
+    fig, levels = _draw_static_graph(triples, title="Mapa de Dependências entre UCs (A → B)")
+    if fig is not None:
+        show_and_export_fig(scope_key, fig, "grafo_dependencias_estatico")
+        plt.close(fig)
 
-    # -----------------------------------------------------------
-    # 📊 Etapa 4 — Tabelas de Relações (organizadas)
-    # -----------------------------------------------------------
-    st.markdown("### 📊 Relações de Dependência entre UCs")
-
-    df_edges = pd.DataFrame(triples, columns=["UC (Pré-requisito)", "UC Dependente", "Justificativa"])
-
-    # 🔹 Agrupa por UC base (quem serve de pré-requisito)
-    df_bases = (
-        df_edges.groupby("UC (Pré-requisito)")["UC Dependente"]
-        .apply(lambda x: ", ".join(sorted(x.unique())))
-        .reset_index()
-        .rename(columns={"UC (Pré-requisito)": "UC Base", "UC Dependente": "UCs que Dependem"})
+    # ---------------- Tabelas (duas perspectivas) ----------------
+    df_edges = pd.DataFrame(triples, columns=["UC (Pré-requisito)", "UC (Dependente)", "Justificativa"])
+    # Camada (nível) por UC
+    layer_df = pd.DataFrame(
+        [{"UC": uc, "Nível (camada)": lv} for uc, lv in levels.items()]
     )
 
-    # 🔹 Agrupa por UC dependente (quem depende de outras)
-    df_dependentes = (
-        df_edges.groupby("UC Dependente")["UC (Pré-requisito)"]
-        .apply(lambda x: ", ".join(sorted(x.unique())))
-        .reset_index()
-        .rename(columns={"UC Dependente": "UC Dependente", "UC (Pré-requisito)": "Pré-requisitos"})
-    )
+    st.markdown("### 📘 Visões em Tabela")
+    tab1, tab2, tab3 = st.tabs(["Para cursar esta UC, preciso de…", "Esta UC prepara para…", "Todas as ligações (com justificativa)"])
 
-    # Interface com abas para clareza
-    tab1, tab2, tab3 = st.tabs(["📘 Bases Formativas", "🔁 Dependências Recebidas", "📄 Tabela Detalhada"])
-
+    # 1) Por UC Destino: lista de pré-requisitos
     with tab1:
-        st.caption("Mostra cada UC e quais outras **dependem** dela.")
-        st.dataframe(df_bases, use_container_width=True, hide_index=True)
-        export_table(scope_key, df_bases, "grafo_bases_formativas", "Bases Formativas")
+        req_by_dest = (
+            df_edges.groupby("UC (Dependente)")
+            .agg(**{
+                "Pré-requisitos": ("UC (Pré-requisito)", lambda s: ", ".join(sorted(set(s)))),
+                "Qtd Pré-requisitos": ("UC (Pré-requisito)", "nunique"),
+            })
+            .reset_index()
+            .sort_values(["Qtd Pré-requisitos", "UC (Dependente)"], ascending=[False, True])
+        )
+        req_by_dest = req_by_dest.merge(layer_df, left_on="UC (Dependente)", right_on="UC", how="left").drop(columns=["UC"])
+        st.dataframe(req_by_dest, use_container_width=True, hide_index=True)
+        export_table(scope_key, req_by_dest, "dependencias_por_destino", "Pré-requisitos por UC (Destino)")
 
+    # 2) Por UC Base: lista de dependentes
     with tab2:
-        st.caption("Mostra cada UC e suas **bases (pré-requisitos)**.")
-        st.dataframe(df_dependentes, use_container_width=True, hide_index=True)
-        export_table(scope_key, df_dependentes, "grafo_dependencias_recebidas", "Dependências Recebidas")
+        deps_by_base = (
+            df_edges.groupby("UC (Pré-requisito)")
+            .agg(**{
+                "Dependentes": ("UC (Dependente)", lambda s: ", ".join(sorted(set(s)))),
+                "Qtd Dependentes": ("UC (Dependente)", "nunique"),
+            })
+            .reset_index()
+            .sort_values(["Qtd Dependentes", "UC (Pré-requisito)"], ascending=[False, True])
+        )
+        deps_by_base = deps_by_base.merge(layer_df, left_on="UC (Pré-requisito)", right_on="UC", how="left").drop(columns=["UC"])
+        st.dataframe(deps_by_base, use_container_width=True, hide_index=True)
+        export_table(scope_key, deps_by_base, "dependencias_por_base", "Dependentes por UC (Pré-requisito)")
 
+    # 3) Edges detalhados
     with tab3:
-        st.caption("Tabela detalhada com todas as relações e justificativas (A → B).")
         st.dataframe(df_edges, use_container_width=True, hide_index=True)
-        export_table(scope_key, df_edges, "grafo_estatico_pre_requisitos", "Relações Detalhadas")
-        export_zip_button(scope_key)
+        export_table(scope_key, df_edges, "dependencias_edges", "Relações A → B com Justificativa")
 
-    # -----------------------------------------------------------
-    # 📈 Etapa 5 — Métricas
-    # -----------------------------------------------------------
+    # ---------------- Análise interpretativa ----------------
+    st.markdown("### 🧾 Análise Interpretativa dos Resultados")
+    st.markdown(_analysis_text(triples))
+
+    # ---------------- Métricas rápidas ----------------
     st.markdown("---")
-    c1, c2 = st.columns(2)
-    c1.metric("UCs analisadas", len(subset))
-    c2.metric("Relações identificadas", len(triples))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("UCs consideradas", len(subset))
+    c2.metric("Relações A → B", len(df_edges))
+    c3.metric("Camadas (níveis) no fluxo", len(set(levels.values())))
 
-    # -----------------------------------------------------------
-    # 📘 Etapa 6 — Interpretação (sempre visível)
-    # -----------------------------------------------------------
-    st.markdown("---")
-    st.subheader("📘 Como interpretar o gráfico")
-    st.markdown(
-        """
-        ### 🔹 Leitura do Mapa
-        - Cada **nó** representa uma Unidade Curricular (UC).
-        - Cada **seta** indica uma **relação de dependência** (A → B = A é pré-requisito de B).
-        - O grafo é desenhado da **esquerda para a direita**, representando o avanço formativo.
-        - UCs mais à esquerda são **fundamentais**, enquanto as mais à direita **dependem de múltiplas bases**.
-
-        ### 🔹 Análises Possíveis
-        - **Coerência vertical** → verifica se as UCs seguem uma progressão lógica e cognitiva.
-        - **Lacunas curriculares** → UCs isoladas ou desconectadas podem indicar falta de articulação.
-        - **Densidade de conexões** → número alto de setas sugere integração interdisciplinar.
-
-        ### 🔹 Aplicações Práticas
-        - Validar **pré-requisitos pedagógicos** entre disciplinas.
-        - Identificar **inconsistências de encadeamento** (UC avançada sem base clara).
-        - Apoiar revisões de **matrizes curriculares**, fluxos de aprendizagem e PPCs.
-        """
-    )
+    # Export ZIP do escopo
+    export_zip_button(scope_key)
