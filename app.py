@@ -144,5 +144,5 @@ st.markdown("---")
 st.caption("""
 📘 **EmentaLabv2** — Ferramenta de análise curricular inteligente.  
 Apoia NDEs e coordenações na revisão de coerência, progressão cognitiva e integração pedagógica das Unidades Curriculares.  
-Desenvolvido com 💙 e IA aplicada à educação.
+Desenvolvido com 💙 e IA aplicada à educação. :)
 """)
