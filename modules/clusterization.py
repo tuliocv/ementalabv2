@@ -28,7 +28,7 @@ def run_cluster(df, scope_key):
     )
     st.caption(
         """
-        Esta análise agrupa as **Ementas das Unidades Curriculares (UCs)** com base em sua similaridade semântica.
+        Esta análise agrupa as **Ementas das Unidades Curriculares (UCs)** com base em similaridade semântica.
         Utiliza **embeddings SBERT** e o algoritmo **K-Means** para revelar **núcleos temáticos** e **áreas de convergência curricular**.
         """
     )
@@ -101,17 +101,26 @@ def run_cluster(df, scope_key):
         representative_ucs.append(uc_name)
 
     # -----------------------------------------------------------
-    # 🧩 Palavras-chave por cluster
+    # 🧩 Palavras-chave por cluster (corrigido)
     # -----------------------------------------------------------
     st.markdown("### 🧩 Tópicos predominantes por Cluster")
 
-    portuguese_stopwords = set(ENGLISH_STOP_WORDS).union({
-        "de", "da", "do", "das", "dos", "para", "por", "com", "a", "o", "e", "em", "como", "ao", "na", "no",
-        "nas", "nos", "sobre", "entre", "pelas", "pelos", "pelo", "pela", "ser", "estar", "ter", "se",
-        "que", "onde", "quando", "uma", "um", "as", "os", "é", "das", "dos"
-    })
+    # ✅ Lista de stopwords compatível com qualquer versão do sklearn
+    base_stopwords = list(ENGLISH_STOP_WORDS)
+    extra_stopwords_pt = [
+        "de", "da", "do", "das", "dos", "para", "por", "com", "a", "o", "e", "em",
+        "como", "ao", "na", "no", "nas", "nos", "sobre", "entre", "pelas", "pelos",
+        "pelo", "pela", "ser", "estar", "ter", "se", "que", "onde", "quando", "uma",
+        "um", "as", "os", "é", "das", "dos", "nas", "nos"
+    ]
+    all_stopwords = base_stopwords + extra_stopwords_pt
 
-    vectorizer = CountVectorizer(stop_words=portuguese_stopwords, max_features=1000)
+    vectorizer = CountVectorizer(
+        stop_words=all_stopwords,
+        max_features=1000,
+        token_pattern=r"(?u)\b\w\w+\b"
+    )
+
     X = vectorizer.fit_transform(textos)
     words = np.array(vectorizer.get_feature_names_out())
 
