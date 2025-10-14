@@ -76,16 +76,22 @@ def run_bloom(df, scope_key):
         refined_levels = []
         total = len(subset)
 
+        # Spinner temporário (oculta após o processamento)
         with st.spinner("🧠 Analisando objetivos com GPT..."):
-            for i, row in enumerate(subset.itertuples(), 1):
+            progress_bar = st.progress(0)
+
+            for i in range(len(subset)):
+                objetivo_texto = subset.iloc[i][col_obj]
+                nivel_heuristico = subset.iloc[i]["Nível Bloom Predominante"]
+
                 prompt = f"""
                 Você é um especialista em taxonomia de Bloom.
                 Classifique o seguinte objetivo de aprendizagem no nível cognitivo mais adequado
                 (Lembrar, Compreender, Aplicar, Analisar, Avaliar ou Criar)
                 e indique o verbo principal usado.
 
-                Objetivo: "{getattr(row, col_obj)}"
-                Classificação heurística prévia: "{row._3}"
+                Objetivo: "{objetivo_texto}"
+                Classificação heurística prévia: "{nivel_heuristico}"
 
                 Responda em formato JSON:
                 {{
@@ -106,7 +112,7 @@ def run_bloom(df, scope_key):
                 except Exception as e:
                     refined_levels.append(f'{{"erro": "{str(e)}"}}')
 
-                st.progress(i / total)
+                progress_bar.progress((i + 1) / total)
 
         # -------------------------------------------------------
         # 📊 Processamento da saída GPT
@@ -114,7 +120,7 @@ def run_bloom(df, scope_key):
         df_gpt = subset.copy()
         df_gpt["Resultado GPT"] = refined_levels
 
-        # Conversão simplificada (JSON parsing leve)
+        # Conversão simplificada (regex de extração)
         df_gpt["Verbo GPT"] = df_gpt["Resultado GPT"].str.extract(r'"verbo"\s*:\s*"([^"]+)"')
         df_gpt["Nível Bloom GPT"] = df_gpt["Resultado GPT"].str.extract(r'"nivel_bloom"\s*:\s*"([^"]+)"')
         df_gpt["Justificativa"] = df_gpt["Resultado GPT"].str.extract(r'"justificativa"\s*:\s*"([^"]+)"')
