@@ -1,5 +1,5 @@
 # ===============================================================
-# 🔗 EmentaLabv2 — Grafo Interativo de Dependências (v8.4)
+# 🔗 EmentaLabv2 — Grafo Interativo de Dependências (v8.5)
 # ===============================================================
 import re
 from typing import List, Tuple
@@ -13,7 +13,9 @@ from utils.embeddings import sbert_embed, l2_normalize
 from pyvis.network import Network
 import tempfile, os
 
-
+# ---------------------------------------------------------------
+# 🔍 Funções auxiliares
+# ---------------------------------------------------------------
 def _parse_dependencies(text: str) -> List[Tuple[str, str]]:
     """Extrai pares 'A -> B' ou frases equivalentes."""
     pairs = []
@@ -44,7 +46,7 @@ def _parse_dependencies(text: str) -> List[Tuple[str, str]]:
 
 
 def _infer_semantic_links(df: pd.DataFrame, col_text: str, n_top: int = 2) -> List[Tuple[str, str]]:
-    """Cria pares prováveis com base em similaridade SBERT."""
+    """Cria pares prováveis com base em similaridade SBERT (fallback automático)."""
     nomes = df["Nome da UC"].astype(str).tolist()
     textos = df[col_text].astype(str).tolist()
     if len(textos) < 2:
@@ -75,12 +77,22 @@ def _draw_interactive_graph(pairs: List[Tuple[str, str]]) -> str:
     return tmp_path
 
 
+# ---------------------------------------------------------------
+# 🚀 Função principal
+# ---------------------------------------------------------------
 def run_graph_interactive(df: pd.DataFrame, scope_key: str):
     st.header("🌐 Grafo Interativo — Relações de Pré-requisito entre UCs")
-    st.caption(
-        "Identifica precedências entre UCs com base nos conteúdos programáticos. "
-        "Usa GPT para inferência textual e SBERT como fallback semântico, exibindo grafo interativo em HTML."
-    )
+    st.markdown("""
+    Este módulo identifica **relações de dependência e precedência** entre as **Unidades Curriculares (UCs)**.
+    A análise permite **visualizar como o conhecimento se encadeia** ao longo da matriz curricular — 
+    revelando **sequências de aprendizagem**, **interdependências** e **lacunas estruturais**.
+
+    ---
+    **Como funciona:**
+    - O modelo GPT lê os **objetos de conhecimento** (ou conteúdos programáticos) de cada UC e infere relações do tipo “A → B” (A é pré-requisito de B).
+    - Quando o GPT não encontra relações explícitas, o sistema utiliza **SBERT** como fallback semântico, identificando pares de UCs com alto grau de similaridade conceitual.
+    - O resultado é exibido como um **grafo interativo**, onde **nós** representam UCs e **setas** indicam precedência de aprendizagem.
+    """)
 
     col_obj = find_col(df, "Objetos de conhecimento") or find_col(df, "Conteúdo programático")
     if not col_obj:
@@ -103,6 +115,7 @@ def run_graph_interactive(df: pd.DataFrame, scope_key: str):
 
     client = OpenAI(api_key=api_key)
 
+    # ---------------- GPT Prompt ----------------
     prompt_lines = [
         "Você deve OBRIGATORIAMENTE indicar relações diretas de pré-requisito entre as UCs listadas.",
         "Responda APENAS no formato 'A -> B', onde A é pré-requisito de B.",
@@ -118,6 +131,7 @@ def run_graph_interactive(df: pd.DataFrame, scope_key: str):
         prompt_lines.append(f"- {r['Nome da UC']}: {truncate(str(r[col_obj]), 600)}")
     prompt = "\n".join(prompt_lines)
 
+    # ---------------- Execução GPT ----------------
     with st.spinner("🧠 Gerando análise via GPT..."):
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -138,15 +152,87 @@ def run_graph_interactive(df: pd.DataFrame, scope_key: str):
         export_zip_button(scope_key)
         return
 
+    # ---------------- Gera o grafo ----------------
     html_path = _draw_interactive_graph(pairs)
     with open(html_path, "r", encoding="utf-8") as f:
         html = f.read()
     st.components.v1.html(html, height=700, scrolling=True)
 
+    # ---------------- Exportações ----------------
     df_edges = pd.DataFrame(pairs, columns=["Pré-requisito", "UC Dependente"])
     export_table(scope_key, df_edges, "grafo_interativo_pre_requisitos", "Relações Pré-requisito (Interativo)")
     export_zip_button(scope_key)
 
     st.markdown("---")
-    st.metric("UCs analisadas", len(subset))
-    st.metric("Relações identificadas", len(pairs))
+    c1, c2 = st.columns(2)
+    c1.metric("UCs analisadas", len(subset))
+    c2.metric("Relações identificadas", len(pairs))
+
+    # -----------------------------------------------------------
+    # 🧠 Interpretação e leitura pedagógica (explicativa)
+    # -----------------------------------------------------------
+    with st.expander("🧭 Como interpretar o grafo e aplicar os resultados", expanded=False):
+        st.markdown("""
+        ### 🔹 1. O que o grafo mostra
+
+        Cada **nó** representa uma Unidade Curricular (UC) e cada **seta** indica uma **relação de precedência**:
+        - **A → B** significa que os conteúdos ou competências da UC **A** são pré-requisitos para compreender **B**.  
+        - UCs com **muitas conexões de saída** (várias setas partindo delas) indicam **fundamentos** ou **disciplinas-base**.  
+        - UCs com **muitas conexões de entrada** indicam **disciplinas de síntese**, que dependem de vários conhecimentos anteriores.
+
+        ---
+
+        ### 🔹 2. Como interpretar a estrutura
+
+        | Tipo de nó | Interpretação pedagógica | Exemplo típico |
+        |-------------|---------------------------|----------------|
+        | **Nó central com muitas saídas** | Fundamento formativo, base conceitual | Matemática, Programação I |
+        | **Nó periférico isolado** | UC independente ou de eixo transversal | Ética, Empreendedorismo |
+        | **Nó com muitas entradas** | Integração de saberes (síntese) | Projeto Integrador, Trabalho de Conclusão |
+        | **Cadeia linear (A → B → C)** | Sequência progressiva de aprendizagem | Física I → Física II → Termodinâmica |
+
+        ---
+
+        ### 🔹 3. Finalidade da análise
+
+        - **Verificar coerência curricular:** se as UCs avançadas dependem de bases sólidas e corretamente ordenadas.  
+        - **Detectar lacunas:** se há UCs que não possuem nenhuma conexão de entrada ou saída, o que pode indicar
+          ausência de integração ou conteúdos isolados.  
+        - **Evidenciar sobreposições:** se várias UCs compartilham dependências semelhantes, pode haver redundância.  
+        - **Apoiar revisões de PPC e NDE:** o grafo funciona como um “mapa de coerência” do fluxo de aprendizagem.
+
+        ---
+
+        ### 🔹 4. Dicas de leitura
+
+        - **Navegue e amplie o grafo**: arraste os nós e observe agrupamentos automáticos por área temática.  
+        - **Clique sobre os nós** para destacar suas dependências diretas.  
+        - **Observe o sentido das setas**: o fluxo ideal vai das bases para as sínteses (da esquerda para a direita).  
+        - **Use o número de relações** (métricas abaixo) para dimensionar a densidade de conexões.
+
+        ---
+
+        ### 🔹 5. Exemplo de interpretação prática
+
+        ```
+        Expressão e Linguagens Visuais → Meios de Representação
+        Meios de Representação → Projeto de Interiores Residenciais
+        Projeto de Interiores Residenciais → Projeto de Habitação Unifamiliar
+        ```
+
+        ✳️ **Leitura:**  
+        - Mostra uma **cadeia formativa progressiva**: primeiro a base de expressão visual, depois representação técnica e, por fim, aplicação em projetos.  
+        - Isso reflete **uma progressão cognitiva de complexidade**, coerente com o desenvolvimento de competências profissionais.
+
+        ---
+
+        ### 🔹 6. Conclusão
+
+        Este grafo evidencia o **encadeamento lógico-pedagógico** da matriz curricular, 
+        revelando **como o conhecimento se propaga entre UCs**.  
+        Ele é uma ferramenta estratégica para:
+        - Revisar coerência vertical da matriz;  
+        - Apoiar revisões do PPC;  
+        - Embasar relatórios de NDE e autoavaliação institucional (CPA).
+
+        """)
