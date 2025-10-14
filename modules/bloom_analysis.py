@@ -17,7 +17,10 @@ def run_bloom(df, scope_key):
     # -----------------------------------------------------------
     # 🏷️ Título e descrição
     # -----------------------------------------------------------
-    st.header("🧠 Mapa de Bloom — Heurística + GPT")
+    st.markdown(
+        "<h2 style='color:#1f77b4;'>🧠 Mapa de Bloom — Heurística + GPT</h2>",
+        unsafe_allow_html=True
+    )
     st.caption(
         """
         Este módulo analisa os **níveis cognitivos da Taxonomia de Bloom** expressos nos
@@ -142,7 +145,7 @@ def run_bloom(df, scope_key):
         ax[1].set_ylabel("% de UCs")
         ax[1].set_xlabel("Nível de Bloom (GPT)")
 
-        st.pyplot(fig, use_container_width=True)
+        # ✅ Apenas uma renderização (sem duplicar)
         show_and_export_fig(scope_key, fig, "bloom_comparativo_gpt")
 
         # -------------------------------------------------------
