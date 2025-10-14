@@ -1,11 +1,9 @@
 # ===============================================================
-# 🌐 EmentaLabv2 — Mapa de Conectividade Curricular (v1.2)
+# 🌐 EmentaLabv2 — Mapa de Conectividade Curricular (v1.3)
 # ===============================================================
-# (mantém nome longitudinal_analysis.py por compatibilidade)
-# - Cria rede de impacto entre UCs via similaridade semântica (SBERT)
-# - Calcula centralidade (grau, intermediação, densidade)
-# - Gera matriz, grafo e relatório analítico via GPT
-# - Elimina duplicação de gráficos e seções repetidas
+# - Remove duplicações visuais (heatmap e grafo)
+# - Gera matriz de similaridade + grafo únicos
+# - Produz relatório GPT breve e direto
 # ===============================================================
 
 import streamlit as st
@@ -18,7 +16,7 @@ from openai import OpenAI
 
 from utils.embeddings import sbert_embed, l2_normalize
 from utils.text_utils import find_col
-from utils.exportkit import export_table, export_zip_button, show_and_export_fig
+from utils.exportkit import export_table, export_zip_button
 
 
 # ---------------------------------------------------------------
@@ -28,14 +26,14 @@ def run_longitudinal(df, scope_key, client=None):
     st.header("🌐 Mapa de Conectividade Curricular (Rede de Impacto)")
     st.caption(
         """
-        Mapeia as **relações semânticas entre Unidades Curriculares (UCs)**, destacando disciplinas
-        **estruturantes**, **intermediárias** e **periféricas** do curso.  
-        A análise combina embeddings SBERT e métricas de rede para identificar o grau de integração curricular.
+        Analisa a **conectividade semântica entre as Unidades Curriculares (UCs)**, destacando 
+        disciplinas **estruturantes**, **intermediárias** e **periféricas** com base na similaridade 
+        de suas ementas e objetos de conhecimento.
         """
     )
 
     # -----------------------------------------------------------
-    # 📂 Localiza colunas principais
+    # 📂 Identificação das colunas relevantes
     # -----------------------------------------------------------
     col_text = (
         find_col(df, "Ementa")
@@ -45,7 +43,7 @@ def run_longitudinal(df, scope_key, client=None):
     col_uc = find_col(df, "Nome da UC")
 
     if not col_uc or not col_text:
-        st.error("Não foram encontradas colunas adequadas ('Nome da UC' e 'Ementa' ou similar).")
+        st.error("Colunas 'Nome da UC' e 'Ementa' (ou equivalente) são necessárias.")
         return
 
     df_valid = df[[col_uc, col_text]].dropna().rename(columns={col_uc: "UC", col_text: "Texto"})
@@ -67,19 +65,19 @@ def run_longitudinal(df, scope_key, client=None):
     export_table(scope_key, df_sim, "matriz_similaridade", "Matriz de Similaridade entre UCs")
 
     # -----------------------------------------------------------
-    # 🔍 Mapa de Similaridade Semântica (único)
+    # 🔍 Exibição única — Matriz de Similaridade
     # -----------------------------------------------------------
-    st.markdown("### 🔍 Mapa de Similaridade Semântica")
-    fig, ax = plt.subplots(figsize=(7, 5))
-    sns.heatmap(df_sim, cmap="crest", linewidths=0.4)
-    ax.set_title("Matriz de Similaridade entre UCs (SBERT)", fontsize=11)
-    st.pyplot(fig, use_container_width=True)
-    show_and_export_fig(scope_key, fig, "mapa_similaridade_semantica")
+    with st.expander("📊 Matriz de Similaridade entre UCs", expanded=True):
+        fig, ax = plt.subplots(figsize=(7, 5))
+        sns.heatmap(df_sim, cmap="crest", linewidths=0.4)
+        ax.set_title("Similaridade Semântica entre UCs (SBERT)", fontsize=11)
+        st.pyplot(fig, use_container_width=True)
+        plt.close(fig)
 
     # -----------------------------------------------------------
     # 🕸️ Construção da Rede de Conectividade
     # -----------------------------------------------------------
-    st.markdown("### 🕸️ Rede de Impacto Curricular")
+    st.markdown("### 🕸️ Mapa de Conectividade Curricular")
     threshold = st.slider("Limite de conexão (similaridade mínima)", 0.5, 0.95, 0.75, 0.05)
 
     G = nx.Graph([
@@ -109,22 +107,23 @@ def run_longitudinal(df, scope_key, client=None):
         .sort_values("Centralidade Grau", ascending=False)
     )
 
-    st.markdown("### 📈 Centralidade das Disciplinas")
-    st.dataframe(df_centralidade, use_container_width=True)
-    export_table(scope_key, df_centralidade, "centralidade_uc", "Centralidade das UCs")
+    with st.expander("📈 Centralidade das Disciplinas", expanded=True):
+        st.dataframe(df_centralidade, use_container_width=True)
+        export_table(scope_key, df_centralidade, "centralidade_uc", "Centralidade das UCs")
 
     # -----------------------------------------------------------
-    # 🎨 Visualização única da Rede
+    # 🎨 Visualização única do Grafo
     # -----------------------------------------------------------
+    st.markdown("### 🎨 Rede de Impacto Curricular")
     pos = nx.spring_layout(G, seed=42, k=0.6)
     fig, ax = plt.subplots(figsize=(10, 7))
-    nx.draw_networkx_nodes(G, pos, node_size=700, node_color="#A5D8FF", edgecolors="#1E88E5")
-    nx.draw_networkx_edges(G, pos, width=1.5, alpha=0.7, edge_color="#64B5F6")
+    nx.draw_networkx_nodes(G, pos, node_size=700, node_color="#A5D8FF", edgecolors="#1565C0")
+    nx.draw_networkx_edges(G, pos, width=1.4, alpha=0.75, edge_color="#64B5F6")
     nx.draw_networkx_labels(G, pos, font_size=8)
     plt.title("Mapa de Conectividade Curricular", fontsize=12, fontweight="bold")
     plt.axis("off")
     st.pyplot(fig, use_container_width=True)
-    show_and_export_fig(scope_key, fig, "grafo_conectividade_curricular")
+    plt.close(fig)
 
     # -----------------------------------------------------------
     # 🧠 Relatório Analítico via GPT
@@ -144,9 +143,9 @@ def run_longitudinal(df, scope_key, client=None):
         )
 
         prompt = (
-            "Você é um avaliador curricular. Com base no resumo a seguir, produza um relatório breve, "
-            "técnico e objetivo, destacando **pontos fortes**, **fragilidades** e **sugestões práticas** "
-            "para melhoria da estrutura curricular. Seja objetivo:\n\n"
+            "Você é um avaliador curricular. Com base no resumo abaixo, produza um relatório breve e direto, "
+            "indicando **pontos fortes**, **fragilidades** e **sugestões práticas** para melhoria da "
+            "estrutura curricular:\n\n"
             f"{resumo}"
         )
 
@@ -164,7 +163,7 @@ def run_longitudinal(df, scope_key, client=None):
             st.error(f"❌ Erro ao gerar relatório via GPT: {e}")
 
     # -----------------------------------------------------------
-    # 🧭 Interpretação (final enxuta)
+    # 🧭 Interpretação final (concisa e não repetida)
     # -----------------------------------------------------------
     st.markdown("---")
     st.markdown(
@@ -176,8 +175,8 @@ def run_longitudinal(df, scope_key, client=None):
         - **Alta densidade:** curso coeso e articulado.  
         - **Baixa densidade:** curso fragmentado, com lacunas entre eixos.
 
-        🔹 **Uso prático:** apoiar revisões curriculares, equilibrar cargas formativas e reforçar conexões
-        entre disciplinas que atuam de forma isolada.
+        🔹 **Aplicação prática:** identificar disciplinas centrais, revisar sobreposições e 
+        promover maior integração entre eixos temáticos.
         """
     )
 
