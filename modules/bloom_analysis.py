@@ -20,11 +20,12 @@ def run_bloom(df, scope_key):
     st.header("🧠 Mapa de Bloom — Heurística + GPT")
     st.caption(
         """
-        Este módulo analisa os **níveis cognitivos de Bloom** expressos nos *Objetivos de Aprendizagem* das UCs.
-        A classificação é feita em duas etapas:
-        1️⃣ **Heurística automática**, baseada em verbos típicos associados aos níveis de Bloom.  
-        2️⃣ **Refinamento GPT (opcional)**, que interpreta semanticamente o verbo e o contexto textual
-        para ajustar o nível sugerido.
+        Este módulo analisa os **níveis cognitivos da Taxonomia de Bloom** expressos nos
+        *Objetivos de Aprendizagem* das Unidades Curriculares (UCs).
+
+        A classificação ocorre em duas etapas:
+        1️⃣ **Heurística automática**, baseada em verbos típicos associados aos níveis de Bloom;  
+        2️⃣ **Refinamento GPT (opcional)**, que interpreta semanticamente o texto para ajustar o nível cognitivo.
         """
     )
 
@@ -40,6 +41,7 @@ def run_bloom(df, scope_key):
     # 🧩 Etapa 1 — Análise Heurística
     # -----------------------------------------------------------
     st.subheader("📊 Distribuição Heurística dos Níveis de Bloom")
+
     df_out = calculate_bloom_level(df, col_obj)
 
     freq = df_out["Nível Bloom Predominante"].value_counts(normalize=True).mul(100).round(1)
@@ -64,7 +66,13 @@ def run_bloom(df, scope_key):
         client = OpenAI(api_key=api_key)
         st.info("O modelo GPT analisará cada objetivo e sugerirá um nível de Bloom mais preciso.")
 
-        subset = df_out[["Nome da UC", col_obj, "Nível Bloom Predominante"]].dropna()
+        # ✅ Corrigido: merge entre df e df_out para garantir a coluna de texto original
+        subset = df[["Nome da UC", col_obj]].merge(
+            df_out[["Nome da UC", "Nível Bloom Predominante"]],
+            on="Nome da UC",
+            how="inner"
+        ).dropna(subset=[col_obj])
+
         refined_levels = []
         total = len(subset)
 
@@ -73,7 +81,8 @@ def run_bloom(df, scope_key):
                 prompt = f"""
                 Você é um especialista em taxonomia de Bloom.
                 Classifique o seguinte objetivo de aprendizagem no nível cognitivo mais adequado
-                (Lembrar, Compreender, Aplicar, Analisar, Avaliar ou Criar) e indique o verbo principal usado.
+                (Lembrar, Compreender, Aplicar, Analisar, Avaliar ou Criar)
+                e indique o verbo principal usado.
 
                 Objetivo: "{getattr(row, col_obj)}"
                 Classificação heurística prévia: "{row._3}"
@@ -105,13 +114,13 @@ def run_bloom(df, scope_key):
         df_gpt = subset.copy()
         df_gpt["Resultado GPT"] = refined_levels
 
-        # Conversão simplificada para DataFrame (verbo, nível, justificativa)
+        # Conversão simplificada (JSON parsing leve)
         df_gpt["Verbo GPT"] = df_gpt["Resultado GPT"].str.extract(r'"verbo"\s*:\s*"([^"]+)"')
         df_gpt["Nível Bloom GPT"] = df_gpt["Resultado GPT"].str.extract(r'"nivel_bloom"\s*:\s*"([^"]+)"')
         df_gpt["Justificativa"] = df_gpt["Resultado GPT"].str.extract(r'"justificativa"\s*:\s*"([^"]+)"')
 
         # -------------------------------------------------------
-        # 📊 Visualização comparativa
+        # 📊 Comparativo Heurística × GPT
         # -------------------------------------------------------
         st.markdown("### 📈 Comparativo Heurístico × GPT")
         freq_gpt = df_gpt["Nível Bloom GPT"].value_counts(normalize=True).mul(100).round(1)
@@ -131,7 +140,7 @@ def run_bloom(df, scope_key):
         show_and_export_fig(scope_key, fig, "bloom_comparativo_gpt")
 
         # -------------------------------------------------------
-        # 📋 Resultado detalhado
+        # 📋 Tabela detalhada e métricas
         # -------------------------------------------------------
         st.markdown("### 📋 Resultados Detalhados por UC")
         df_gpt["Concordância"] = df_gpt.apply(
@@ -139,7 +148,7 @@ def run_bloom(df, scope_key):
         )
 
         concord_rate = (df_gpt["Concordância"] == "✅").mean() * 100
-        st.metric("Taxa de concordância Heurística × GPT", f"{concord_rate:.1f}%")
+        st.metric("Taxa de Concordância Heurística × GPT", f"{concord_rate:.1f}%")
 
         st.dataframe(
             df_gpt[
@@ -156,28 +165,28 @@ def run_bloom(df, scope_key):
         export_zip_button(scope_key)
 
     # -----------------------------------------------------------
-    # 📘 Interpretação dos resultados
+    # 📘 Interpretação e guia de leitura
     # -----------------------------------------------------------
     st.markdown("---")
     st.subheader("📘 Como interpretar os resultados")
     st.markdown(
         """
         **1️⃣ Interpretação dos níveis Bloom:**
-        - 🧠 *Lembrar*: recordação de informações básicas e fatos.
-        - 💡 *Compreender*: interpretação e explicação de conceitos.
-        - 🧩 *Aplicar*: uso de métodos e conhecimentos em situações práticas.
-        - 🔍 *Analisar*: deconstrução de informações e identificação de relações.
-        - ⚖️ *Avaliar*: julgamento crítico e comparação de alternativas.
-        - 🎨 *Criar*: síntese de elementos para gerar algo novo.
+        - 🧠 *Lembrar*: recordação de informações e fatos básicos.  
+        - 💡 *Compreender*: interpretação e explicação de conceitos.  
+        - 🧩 *Aplicar*: uso de métodos e conhecimentos em situações práticas.  
+        - 🔍 *Analisar*: decomposição e identificação de relações.  
+        - ⚖️ *Avaliar*: julgamento crítico e argumentação de decisões.  
+        - 🎨 *Criar*: síntese e produção de novas ideias ou artefatos.
 
         **2️⃣ Uso combinado Heurístico + GPT:**
-        - A heurística fornece uma visão quantitativa rápida baseada em verbos.
-        - O GPT refina o contexto, identificando nuances linguísticas e semânticas.
-        - Divergências entre ambos indicam *potenciais inconsistências de formulação* nos objetivos.
+        - A heurística fornece uma **visão quantitativa rápida** baseada em verbos.  
+        - O GPT refina o contexto, considerando **significado semântico e objetivo pedagógico**.  
+        - Divergências indicam possíveis **inconsistências na formulação dos objetivos**.
 
         **3️⃣ Aplicações práticas:**
-        - Revisar a coerência dos objetivos com os níveis cognitivos esperados.
-        - Uniformizar a linguagem pedagógica em um curso ou núcleo formativo.
-        - Subsidiar revisões de PPC e planos de ensino.
+        - Revisar a coerência entre os objetivos e os níveis cognitivos esperados.  
+        - Padronizar a linguagem pedagógica entre cursos ou núcleos.  
+        - Subsidiar revisões de PPC e de planos de ensino, fortalecendo evidências de coerência curricular.
         """
     )
