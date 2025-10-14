@@ -1,5 +1,5 @@
 # ===============================================================
-# 🧠 EmentaLabv2 — Inteligência Curricular (v11.2)
+# 🧠 EmentaLabv2 — Inteligência Curricular (v11.0)
 # ===============================================================
 import streamlit as st
 import pandas as pd
@@ -15,38 +15,37 @@ from utils.text_utils import normalize_text
 st.set_page_config(page_title="EmentaLabv2", layout="wide", page_icon="🧠")
 
 # ---------------------------------------------------------------
-# 🎨 SIDEBAR — Fluxo guiado
+# 🎨 Sidebar — Identidade e Configuração
 # ---------------------------------------------------------------
 logo = Path("assets/logo.png")
 if logo.exists():
     st.sidebar.image(str(logo), width=220)
 
 st.sidebar.title("🧠 EmentaLabv2 — Inteligência Curricular")
-st.sidebar.markdown("Ferramenta para análise automatizada de ementas e competências.")
 st.sidebar.markdown("---")
 
 # ===============================================================
-# 1️⃣ ETAPA — Upload da Base Curricular
+# 🧩 ETAPA 1 — Upload do Arquivo
 # ===============================================================
-st.sidebar.subheader("📂 Etapa 1 — Carregar Base Curricular")
-uploaded = st.sidebar.file_uploader("Envie o arquivo (.xlsx ou .csv)", type=["xlsx", "csv"])
+st.sidebar.header("📂 Etapa 1 — Carregar Base Curricular")
+uploaded = st.sidebar.file_uploader("Selecione o arquivo (.xlsx ou .csv)", type=["xlsx", "csv"])
 
 if not uploaded:
-    st.info("👈 Envie um arquivo Excel ou CSV na lateral para iniciar.")
+    st.info("👈 Envie um arquivo Excel ou CSV para iniciar a análise.")
     st.stop()
 
 try:
     if uploaded.name.lower().endswith(".csv"):
         df = pd.read_csv(uploaded)
-        sheet_info = "(CSV)"
+        tipo_arquivo = "CSV"
     else:
         df = pd.read_excel(uploaded, engine="openpyxl")
-        sheet_info = "(XLSX)"
+        tipo_arquivo = "Excel"
 except Exception as e:
     st.error(f"Erro ao carregar o arquivo: {e}")
     st.stop()
 
-# limpeza de colunas
+# Limpeza dos nomes de colunas
 df.columns = (
     df.columns
     .str.replace(r"[\n\r\xa0]", " ", regex=True)
@@ -54,192 +53,184 @@ df.columns = (
     .str.strip()
 )
 
-st.sidebar.success(f"✅ Base carregada ({len(df)} registros)")
-st.sidebar.caption(f"📄 {uploaded.name} {sheet_info}")
-st.sidebar.markdown("---")
+st.caption(f"📄 Arquivo carregado: **{uploaded.name}** ({tipo_arquivo}) | Registros: **{len(df)}**")
 
 # ===============================================================
-# 2️⃣ ETAPA — Configuração da Chave OpenAI
+# 🔑 ETAPA 2 — Configurar API Key
 # ===============================================================
-st.sidebar.subheader("🔑 Etapa 2 — Chave OpenAI (opcional)")
-api_key = st.sidebar.text_input(
-    "Informe a chave (sk-...)", 
-    type="password", 
-    placeholder="sk-xxxxxxxxxxxxxxxx"
-)
-client = OpenAI(api_key=api_key) if api_key else None
+st.sidebar.header("🔑 Etapa 2 — Configurar OpenAI API Key")
+api_key = st.sidebar.text_input("OpenAI API Key (opcional)", type="password", placeholder="sk-...")
 
 if api_key:
-    st.sidebar.success("✅ Chave validada com sucesso.")
+    client = OpenAI(api_key=api_key)
+    st.sidebar.success("✅ Chave carregada com sucesso.")
 else:
-    st.sidebar.info("ℹ️ Sem chave: análises GPT ficarão desativadas.")
+    client = None
+    st.sidebar.info("ℹ️ Recursos com GPT ficarão desativados até inserir a chave.")
+
 st.sidebar.markdown("---")
 
 # ===============================================================
-# 3️⃣ ETAPA — Filtros Encadeados
+# 🎯 ETAPA 3 — Aplicar Filtros Dinâmicos
 # ===============================================================
-st.sidebar.subheader("🎯 Etapa 3 — Aplicar Filtros (encadeados)")
-
+st.sidebar.header("🎯 Etapa 3 — Aplicar Filtros")
+filter_cols = ["Nome do curso", "Modalidade do curso", "Tipo Graduação", "Cluster", "Tipo do componente"]
 df_filtered = df.copy()
 active_filters = {}
 
-# --- Filtro 1: Nome do Curso ---
-if "Nome do curso" in df.columns:
-    cursos = sorted(df["Nome do curso"].dropna().astype(str).unique())
-    sel_curso = st.sidebar.multiselect("Nome do curso", cursos)
-    if sel_curso:
-        df_filtered = df_filtered[df_filtered["Nome do curso"].isin(sel_curso)]
-        active_filters["Nome do curso"] = sel_curso
-
-# --- Filtro 2: Modalidade (dependente do curso) ---
-if "Modalidade do curso" in df.columns:
-    modalidades = sorted(df_filtered["Modalidade do curso"].dropna().astype(str).unique())
-    sel_mod = st.sidebar.multiselect("Modalidade do curso", modalidades)
-    if sel_mod:
-        df_filtered = df_filtered[df_filtered["Modalidade do curso"].isin(sel_mod)]
-        active_filters["Modalidade do curso"] = sel_mod
-
-# --- Filtro 3: Tipo de Graduação ---
-if "Tipo Graduação" in df.columns:
-    tipos = sorted(df_filtered["Tipo Graduação"].dropna().astype(str).unique())
-    sel_tipo = st.sidebar.multiselect("Tipo de Graduação", tipos)
-    if sel_tipo:
-        df_filtered = df_filtered[df_filtered["Tipo Graduação"].isin(sel_tipo)]
-        active_filters["Tipo Graduação"] = sel_tipo
-
-# --- Filtro 4: Cluster ---
-if "Cluster" in df.columns:
-    clusters = sorted(df_filtered["Cluster"].dropna().astype(str).unique())
-    sel_cluster = st.sidebar.multiselect("Cluster", clusters)
-    if sel_cluster:
-        df_filtered = df_filtered[df_filtered["Cluster"].isin(sel_cluster)]
-        active_filters["Cluster"] = sel_cluster
-
-# --- Filtro 5: Tipo do Componente ---
-if "Tipo do componente" in df.columns:
-    comps = sorted(df_filtered["Tipo do componente"].dropna().astype(str).unique())
-    sel_comp = st.sidebar.multiselect("Tipo do componente", comps)
-    if sel_comp:
-        df_filtered = df_filtered[df_filtered["Tipo do componente"].isin(sel_comp)]
-        active_filters["Tipo do componente"] = sel_comp
-
-# --- feedback ---
-if active_filters:
-    st.sidebar.success(f"🎯 {len(active_filters)} filtros aplicados")
-else:
-    st.sidebar.info("Nenhum filtro aplicado (todas as UCs incluídas).")
-st.sidebar.caption(f"📊 Registros filtrados: {len(df_filtered)}")
-st.sidebar.markdown("---")
+# Filtros dependentes (respeitam seleção anterior)
+for col in filter_cols:
+    if col in df_filtered.columns:
+        values = sorted(df_filtered[col].dropna().astype(str).unique())
+        sel = st.sidebar.multiselect(col, values, default=[])
+        if sel:
+            df_filtered = df_filtered[df_filtered[col].astype(str).isin(sel)]
+            active_filters[col] = sel
 
 # ===============================================================
-# 4️⃣ ETAPA — Seleção do Tipo de Análise
+# 🧭 ETAPA 4 — Selecionar Tipo de Análise
 # ===============================================================
-st.sidebar.subheader("📈 Etapa 4 — Escolher Tipo de Análise")
+st.sidebar.header("🧭 Etapa 4 — Selecionar Tipo de Análise")
 
 menu = st.sidebar.selectbox(
-    "Selecione uma análise:",
+    "Escolha a análise desejada:",
     [
-        "📊 Resumo Geral",
-        "✅ Cobertura Curricular",
-        "📈 Curva Bloom Progressiva",
-        "🎯 Alinhamento de Objetivos e Competências",
-        "🧩 Similaridade e Redundância",
-        "🌐 Convergência Temática",
-        "🔗 Dependência Curricular",
-        "💬 Clareza e Sentimento das Ementas",
-        "📆 Análise Longitudinal",
-        "🤖 Relatório Consultivo",
+        "1️⃣ 📊 Resumo Geral",
+        "2️⃣ ✅ Cobertura Curricular",
+        "3️⃣ 📈 Curva Bloom Progressiva",
+        "4️⃣ 🎯 Alinhamento de Objetivos e Competências",
+        "5️⃣ 🧩 Similaridade e Redundância",
+        "6️⃣ 🌐 Convergência Temática",
+        "7️⃣ 🔗 Dependência Curricular",
+        "8️⃣ 💬 Clareza e Sentimento das Ementas",
+        "9️⃣ 📆 Análise Longitudinal",
+        "🔟 🤖 Relatório Consultivo",
     ],
     index=0
 )
 
-# inicializa diretório de exportação
 scope_key = normalize_text(menu).replace(" ", "_")
 _init_exports(scope_key)
 
 # ---------------------------------------------------------------
-# CONTEÚDO PRINCIPAL — Cabeçalho
+# 🔍 Exibir filtros aplicados
 # ---------------------------------------------------------------
-st.markdown("## 🧩 EmentaLabv2 — Painel de Análise")
-st.caption("Analise e explore relações entre ementas, objetivos, competências e coerência curricular.")
-st.markdown("---")
-
-# exibe filtros ativos
 with st.expander("🔍 Filtros aplicados", expanded=False):
     if active_filters:
         for k, v in active_filters.items():
             st.write(f"**{k}:** {', '.join(map(str, v))}")
     else:
         st.caption("Nenhum filtro aplicado.")
+st.markdown("---")
 
-# ---------------------------------------------------------------
-# EXECUÇÃO DAS ANÁLISES
-# ---------------------------------------------------------------
-if menu == "📊 Resumo Geral":
-    from modules.summary_dashboard import run_summary
-    st.header("📊 Resumo Geral")
-    run_summary(df_filtered, scope_key)
+# ===============================================================
+# 🚀 Execução da Análise Selecionada
+# ===============================================================
+if menu.endswith("📊 Resumo Geral") or "Resumo Geral" in menu:
+    try:
+        from modules.summary_dashboard import run_summary
+        st.header("📊 Resumo Geral")
+        st.caption("Visão geral dos dados importados, número de UCs, cursos e distribuição geral.")
+        run_summary(df_filtered, scope_key)
+    except Exception as e:
+        st.error(f"Erro ao carregar Resumo Geral: {e}")
 
-elif menu == "✅ Cobertura Curricular":
-    from modules.coverage_report import run_coverage
-    st.header("✅ Cobertura Curricular")
-    run_coverage(df_filtered, scope_key)
+elif "Cobertura Curricular" in menu:
+    try:
+        from modules.coverage_report import run_coverage
+        st.header("✅ Cobertura Curricular")
+        st.caption("Mapeia o grau de cobertura das competências e conteúdos previstos nas UCs.")
+        run_coverage(df_filtered, scope_key)
+    except Exception as e:
+        st.error(f"Erro na Cobertura Curricular: {e}")
 
-elif menu == "📈 Curva Bloom Progressiva":
-    from modules.bloom_analysis import run_bloom
-    st.header("📈 Curva Bloom Progressiva")
-    run_bloom(df_filtered, scope_key, client)
+elif "Curva Bloom Progressiva" in menu:
+    try:
+        from modules.bloom_analysis import run_bloom
+        st.header("📈 Curva Bloom Progressiva")
+        st.caption("Analisa o nível cognitivo predominante (Taxonomia de Bloom) dos objetivos de aprendizagem.")
+        run_bloom(df_filtered, scope_key)
+    except Exception as e:
+        st.error(f"Erro na Curva Bloom Progressiva: {e}")
 
-elif menu == "🎯 Alinhamento de Objetivos e Competências":
-    from modules.alignment_topk import run_alignment
-    st.header("🎯 Alinhamento de Objetivos e Competências")
-    run_alignment(df_filtered, scope_key)
+elif "Alinhamento de Objetivos e Competências" in menu:
+    try:
+        from modules.alignment_topk import run_alignment
+        st.header("🎯 Alinhamento de Objetivos e Competências")
+        st.caption("Avalia a coerência entre os objetivos de aprendizagem e as competências do egresso.")
+        run_alignment(df_filtered, scope_key)
+    except Exception as e:
+        st.error(f"Erro no Alinhamento: {e}")
 
-elif menu == "🧩 Similaridade e Redundância":
-    from modules.redundancy_matrix import run_redundancy, run_pair_analysis
-    st.header("🧩 Similaridade e Redundância")
-    tab1, tab2 = st.tabs(["🔁 Redundância entre UCs", "🔬 Comparação Frase a Frase"])
-    with tab1:
-        run_redundancy(df_filtered, scope_key)
-    with tab2:
-        run_pair_analysis(df_filtered, scope_key)
+elif "Similaridade e Redundância" in menu:
+    try:
+        from modules.redundancy_matrix import run_redundancy, run_pair_analysis
+        st.header("🧩 Similaridade e Redundância")
+        st.caption("Detecta sobreposições de conteúdo entre ementas e permite comparar UCs frase a frase.")
+        tab1, tab2 = st.tabs(["🔁 Redundância entre UCs", "🔬 Comparação Frase a Frase"])
+        with tab1:
+            run_redundancy(df_filtered, scope_key)
+        with tab2:
+            run_pair_analysis(df_filtered, scope_key)
+    except Exception as e:
+        st.error(f"Erro em Similaridade e Redundância: {e}")
 
-elif menu == "🌐 Convergência Temática":
-    from modules.clusterization import run_cluster
-    st.header("🌐 Convergência Temática")
-    run_cluster(df_filtered, scope_key, client)
+elif "Convergência Temática" in menu:
+    try:
+        from modules.clusterization import run_cluster
+        st.header("🌐 Convergência Temática")
+        st.caption("Agrupa UCs por similaridade semântica, revelando convergências interdisciplinares.")
+        run_cluster(df_filtered, scope_key, client)
+    except Exception as e:
+        st.error(f"Erro na Convergência Temática: {e}")
 
-elif menu == "🔗 Dependência Curricular":
-    from modules.dependency_graph import run_graph
-    st.header("🔗 Dependência Curricular")
-    run_graph(df_filtered, scope_key, client)
+elif "Dependência Curricular" in menu:
+    try:
+        from modules.dependency_graph import run_graph
+        st.header("🔗 Dependência Curricular")
+        st.caption("Identifica relações de precedência e interdependência entre UCs com base em inferência semântica.")
+        run_graph(df_filtered, scope_key, client)
+    except Exception as e:
+        st.error(f"Erro na Dependência Curricular: {e}")
 
-elif menu == "💬 Clareza e Sentimento das Ementas":
-    from modules.sentiment_analysis import run_sentiment
-    st.header("💬 Clareza e Sentimento das Ementas")
-    run_sentiment(df_filtered, scope_key, client)
+elif "Clareza e Sentimento" in menu:
+    try:
+        from modules.sentiment_analysis import run_sentiment
+        st.header("💬 Clareza e Sentimento das Ementas")
+        st.caption("Analisa o tom e a clareza textual das ementas, detectando vieses ou falta de objetividade.")
+        run_sentiment(df_filtered, scope_key, client)
+    except Exception as e:
+        st.error(f"Erro em Clareza e Sentimento: {e}")
 
-elif menu == "📆 Análise Longitudinal":
-    from modules.longitudinal_analysis import run_longitudinal
-    st.header("📆 Análise Longitudinal")
-    run_longitudinal(df_filtered, scope_key, client)
+elif "Análise Longitudinal" in menu:
+    try:
+        from modules.longitudinal_analysis import run_longitudinal
+        st.header("📆 Análise Longitudinal")
+        st.caption("Acompanha revisões e evoluções curriculares ao longo dos semestres ou versões das ementas.")
+        run_longitudinal(df_filtered, scope_key, client)
+    except Exception as e:
+        st.error(f"Erro na Análise Longitudinal: {e}")
 
-elif menu == "🤖 Relatório Consultivo":
-    from modules.consultive_report import run_consultive
-    st.header("🤖 Relatório Consultivo")
-    run_consultive(df_filtered, scope_key, client)
+elif "Relatório Consultivo" in menu:
+    try:
+        from modules.consultive_report import run_consultive
+        st.header("🤖 Relatório Consultivo")
+        st.caption("Gera um relatório automatizado com diagnósticos e recomendações sobre a coerência curricular geral.")
+        run_consultive(df_filtered, scope_key, client)
+    except Exception as e:
+        st.error(f"Erro no Relatório Consultivo: {e}")
 
-# ---------------------------------------------------------------
+# ===============================================================
 # 📦 Exportação Global
-# ---------------------------------------------------------------
+# ===============================================================
 st.markdown("---")
 export_zip_button(scope_key)
 
-# ---------------------------------------------------------------
+# ===============================================================
 # 🧭 Rodapé
-# ---------------------------------------------------------------
+# ===============================================================
 st.markdown("---")
 st.caption("""
 📘 **EmentaLabv2** — Ferramenta de análise curricular inteligente.  
-Desenvolvido para apoiar **NDEs e coordenações** na revisão de coerência, progressão cognitiva e integração pedagógica.
+Desenvolvido para apoiar na revisão de coerência, progressão cognitiva e integração pedagógica.
 """)
