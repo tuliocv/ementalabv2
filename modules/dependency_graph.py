@@ -227,20 +227,6 @@ def run_graph(df, scope_key, client=None):
     c2.metric("Relações identificadas", len(triples))
 
     # -----------------------------------------------------------
-    # 🧭 Etapa 7 — Interpretação
-    # -----------------------------------------------------------
-    st.markdown("---")
-    st.markdown(
-        """
-        ## 🧭 Como interpretar o gráfico
-        - Cada **nó** representa uma Unidade Curricular (UC).
-        - Cada **seta** indica uma **relação de dependência** (A → B = A é pré-requisito de B).
-        - UCs à esquerda são **bases estruturantes**; UCs à direita dependem dessas fundações.
-        - UCs isoladas podem representar **disciplinas autônomas ou desconectadas**.
-        """
-    )
-
-    # -----------------------------------------------------------
     # 🧾 Etapa 8 — Relatório Analítico Objetivo
     # -----------------------------------------------------------
     if client is not None:
@@ -268,5 +254,20 @@ def run_graph(df, scope_key, client=None):
                 st.markdown(analise_texto)
             except Exception as e:
                 st.warning(f"Não foi possível gerar o relatório analítico: {e}")
+
+    # -----------------------------------------------------------
+    # 🧭 Etapa 7 — Interpretação
+    # -----------------------------------------------------------
+    st.markdown("---")
+    st.markdown(
+        """
+        ## 🧭 Como interpretar o gráfico
+        - Cada **nó** representa uma Unidade Curricular (UC).
+        - Cada **seta** indica uma **relação de dependência** (A → B = A é pré-requisito de B).
+        - UCs à esquerda são **bases estruturantes**; UCs à direita dependem dessas fundações.
+        - UCs isoladas podem representar **disciplinas autônomas ou desconectadas**.
+        """
+    )
+
 
     export_zip_button(scope_key)
