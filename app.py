@@ -7,9 +7,6 @@ from utils.text_utils import normalize_text
 
 from modules.dependency_graph_interactive import run_graph_interactive
 
-# Dentro da escolha de análises:
-elif analise == "Grafo Interativo (PyVis)":
-    run_graph_interactive(df, scope_key)
 
 
 # Configuração de página
@@ -98,3 +95,7 @@ elif menu == "🔗 Sequenciamento / Grafo (GPT)":
 elif menu == "🤖 Relatório Consultivo (GPT)":
     from modules.consultive_report import run_consultive
     run_consultive(df, scope_key)
+
+# Dentro da escolha de análises:
+elif analise == "Grafo Interativo (PyVis)":
+    run_graph_interactive(df, scope_key)
