@@ -1,9 +1,10 @@
 # ===============================================================
 # 🌐 EmentaLabv2 — Mapa de Conectividade Curricular (v1.0)
 # ===============================================================
+# (mantém nome longitudinal_analysis.py por compatibilidade)
 # - Cria rede de impacto entre UCs via similaridade semântica
 # - Calcula métricas de centralidade (grau, intermediação, densidade)
-# - Identifica UCs estruturantes, periféricas e redundantes
+# - Identifica UCs estruturantes, intermediárias e periféricas
 # - Gera visualização de grafo e relatório analítico automático (GPT)
 # ===============================================================
 
@@ -23,7 +24,7 @@ from utils.exportkit import export_table, export_zip_button, show_and_export_fig
 # ---------------------------------------------------------------
 # 🚀 Função principal
 # ---------------------------------------------------------------
-def run_connectivity(df, scope_key, client=None):
+def run_longitudinal(df, scope_key, client=None):
     st.header("🌐 Mapa de Conectividade Curricular (Rede de Impacto)")
     st.caption(
         """
