@@ -1,5 +1,5 @@
 # ===============================================================
-# 🔗 EmentaLabv2 — Grafo de Dependências (v11.1 — Direcional + Justificativas)
+# 🔗 EmentaLabv2 — Grafo de Dependências (v11.2 — Hierárquico + Tabelas Agrupadas)
 # ===============================================================
 import re
 import matplotlib.pyplot as plt
@@ -196,13 +196,46 @@ def run_graph(df, scope_key, client=None):
     _draw_static_graph(triples, show_labels=show_labels)
 
     # -----------------------------------------------------------
-    # 📊 Etapa 4 — Tabela de Relações
+    # 📊 Etapa 4 — Tabelas de Relações (organizadas)
     # -----------------------------------------------------------
+    st.markdown("### 📊 Relações de Dependência entre UCs")
+
     df_edges = pd.DataFrame(triples, columns=["UC (Pré-requisito)", "UC Dependente", "Justificativa"])
-    st.markdown("### 📘 Relações Identificadas e Justificativas")
-    st.dataframe(df_edges, use_container_width=True, hide_index=True)
-    export_table(scope_key, df_edges, "grafo_estatico_pre_requisitos", "Relações Pré-requisito")
-    export_zip_button(scope_key)
+
+    # 🔹 Agrupa por UC base (quem serve de pré-requisito)
+    df_bases = (
+        df_edges.groupby("UC (Pré-requisito)")["UC Dependente"]
+        .apply(lambda x: ", ".join(sorted(x.unique())))
+        .reset_index()
+        .rename(columns={"UC (Pré-requisito)": "UC Base", "UC Dependente": "UCs que Dependem"})
+    )
+
+    # 🔹 Agrupa por UC dependente (quem depende de outras)
+    df_dependentes = (
+        df_edges.groupby("UC Dependente")["UC (Pré-requisito)"]
+        .apply(lambda x: ", ".join(sorted(x.unique())))
+        .reset_index()
+        .rename(columns={"UC Dependente": "UC Dependente", "UC (Pré-requisito)": "Pré-requisitos"})
+    )
+
+    # Interface com abas para clareza
+    tab1, tab2, tab3 = st.tabs(["📘 Bases Formativas", "🔁 Dependências Recebidas", "📄 Tabela Detalhada"])
+
+    with tab1:
+        st.caption("Mostra cada UC e quais outras **dependem** dela.")
+        st.dataframe(df_bases, use_container_width=True, hide_index=True)
+        export_table(scope_key, df_bases, "grafo_bases_formativas", "Bases Formativas")
+
+    with tab2:
+        st.caption("Mostra cada UC e suas **bases (pré-requisitos)**.")
+        st.dataframe(df_dependentes, use_container_width=True, hide_index=True)
+        export_table(scope_key, df_dependentes, "grafo_dependencias_recebidas", "Dependências Recebidas")
+
+    with tab3:
+        st.caption("Tabela detalhada com todas as relações e justificativas (A → B).")
+        st.dataframe(df_edges, use_container_width=True, hide_index=True)
+        export_table(scope_key, df_edges, "grafo_estatico_pre_requisitos", "Relações Detalhadas")
+        export_zip_button(scope_key)
 
     # -----------------------------------------------------------
     # 📈 Etapa 5 — Métricas
@@ -213,7 +246,7 @@ def run_graph(df, scope_key, client=None):
     c2.metric("Relações identificadas", len(triples))
 
     # -----------------------------------------------------------
-    # 📘 Etapa 6 — Interpretação (exibida sempre)
+    # 📘 Etapa 6 — Interpretação (sempre visível)
     # -----------------------------------------------------------
     st.markdown("---")
     st.subheader("📘 Como interpretar o gráfico")
