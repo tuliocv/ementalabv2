@@ -2,7 +2,7 @@
 # ☁️ WordCloud Analysis — Nuvem de Palavras das UCs
 # ============================================================
 import streamlit as st
-from wordcloud import WordCloud
+from wordcloud import WordCloud, STOPWORDS
 import matplotlib.pyplot as plt
 import pandas as pd
 import re
@@ -12,20 +12,30 @@ import re
 # ============================================================
 def run_wordcloud(df: pd.DataFrame, scope_key: str):
     """
-    Gera uma nuvem de palavras com base nas ementas, objetivos ou competências das UCs.
+    Gera nuvens de palavras específicas para colunas curriculares
+    (Competências, Ementa, Objetivos etc.), com remoção de stopwords.
     """
 
     st.subheader("☁️ Nuvem de Palavras das Unidades Curriculares")
 
     # --------------------------------------------------------
-    # 🧭 Seleção do campo base
+    # 🧭 Colunas de interesse específicas
     # --------------------------------------------------------
-    text_cols = [c for c in df.columns if df[c].dtype == "object"]
-    col_sel = st.selectbox(
-        "Selecione o campo de texto para gerar a nuvem:",
-        options=text_cols,
-        index=text_cols.index("Ementa") if "Ementa" in text_cols else 0
-    )
+    colunas_alvo = [
+        "Competências do Perfil do Egresso",
+        "Relação competência DCN",
+        "Ementa (Assuntos que serão abordado)",
+        "Objetivo de aprendizagem",
+        "Objetos de conhecimento (Conteúdo programático)",
+    ]
+
+    # Filtra colunas que existem no DataFrame
+    colunas_existentes = [c for c in colunas_alvo if c in df.columns]
+
+    if not colunas_existentes:
+        st.warning("Nenhuma das colunas esperadas foi encontrada na base.")
+        st.write("Esperadas:", ", ".join(colunas_alvo))
+        return
 
     # --------------------------------------------------------
     # 🧹 Pré-processamento textual
@@ -37,8 +47,18 @@ def run_wordcloud(df: pd.DataFrame, scope_key: str):
         txt = re.sub(r"\s+", " ", txt)
         return txt.strip()
 
-    df["__texto_limpo__"] = df[col_sel].astype(str).apply(limpar_texto)
-    texto_total = " ".join(df["__texto_limpo__"].tolist())
+    # --------------------------------------------------------
+    # 🧾 Stopwords em português
+    # --------------------------------------------------------
+    stopwords_pt = set([
+        # stopwords básicas
+        "de", "da", "do", "das", "dos", "e", "em", "para", "por", "com", "a", "o", "as", "os", 
+        "na", "no", "nas", "nos", "um", "uma", "uns", "umas", "que", "como", "se", "ao", "à",
+        "às", "aos", "sobre", "entre", "pela", "pelo", "pelas", "pelos", "não", "ser", "estar",
+        "ter", "ou", "sua", "seu", "suas", "seus", "mais", "menos", "também", "quando", "onde",
+        "cada", "outro", "outra", "outros", "outras", "para", "com", "pode", "podem", "através",
+        "visando", "formação", "capacidade", "habilidade", "competência", "conhecimento"
+    ]) | STOPWORDS
 
     # --------------------------------------------------------
     # ⚙️ Configurações de exibição
@@ -53,43 +73,43 @@ def run_wordcloud(df: pd.DataFrame, scope_key: str):
     fundo_transp = st.sidebar.checkbox("Fundo transparente", value=False)
 
     # --------------------------------------------------------
-    # ☁️ Geração da nuvem
+    # ☁️ Geração das nuvens para cada coluna
     # --------------------------------------------------------
-    if not texto_total.strip():
-        st.warning("Nenhum texto disponível para gerar a nuvem.")
-        return
+    for col in colunas_existentes:
+        st.markdown(f"### 📘 {col}")
+        df["__texto_limpo__"] = df[col].astype(str).apply(limpar_texto)
+        texto_total = " ".join(df["__texto_limpo__"].tolist())
 
-    st.info(f"Gerando nuvem de palavras com base em **{col_sel}**...")
+        if not texto_total.strip():
+            st.info(f"Nenhum texto válido encontrado na coluna **{col}**.")
+            continue
 
-    wc = WordCloud(
-        width=1200,
-        height=600,
-        background_color=None if fundo_transp else "white",
-        mode="RGBA" if fundo_transp else "RGB",
-        colormap=colormap,
-        max_words=max_palavras,
-        collocations=False,
-        normalize_plurals=True
-    ).generate(texto_total)
+        wc = WordCloud(
+            width=1200,
+            height=600,
+            background_color=None if fundo_transp else "white",
+            mode="RGBA" if fundo_transp else "RGB",
+            colormap=colormap,
+            max_words=max_palavras,
+            stopwords=stopwords_pt,
+            collocations=False,
+            normalize_plurals=True
+        ).generate(texto_total)
 
-    # --------------------------------------------------------
-    # 📊 Exibir gráfico
-    # --------------------------------------------------------
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.imshow(wc, interpolation="bilinear")
-    ax.axis("off")
-    st.pyplot(fig)
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.imshow(wc, interpolation="bilinear")
+        ax.axis("off")
+        st.pyplot(fig)
 
-    # --------------------------------------------------------
-    # 📦 Download opcional
-    # --------------------------------------------------------
-    buf = wc.to_image()
-    st.download_button(
-        "💾 Baixar imagem da nuvem",
-        data=_image_to_bytes(buf),
-        file_name=f"nuvem_palavras_{scope_key}.png",
-        mime="image/png"
-    )
+        # 📦 Download individual
+        buf = wc.to_image()
+        st.download_button(
+            f"💾 Baixar imagem — {col}",
+            data=_image_to_bytes(buf),
+            file_name=f"nuvem_{col.replace(' ', '_')}_{scope_key}.png",
+            mime="image/png"
+        )
+        st.markdown("---")
 
 # ============================================================
 # 🔧 Função auxiliar para converter imagem em bytes
