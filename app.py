@@ -122,6 +122,8 @@ menu = st.sidebar.selectbox(
         "8️⃣ 💬 Clareza e Sentimento das Ementas",
         "9️⃣ 📈 Mapa de Conectividade Curricular",
         "🔟 🤖 Relatório Consultivo",
+        "☁️ Nuvem de Palavras das UCs",
+        
     ],
     index=0
 )
@@ -280,6 +282,18 @@ elif "Relatório Consultivo" in menu:
             run_consultive(df_filtered, scope_key)
     except Exception as e:
         st.error(f"Erro no Relatório Consultivo: {e}")
+
+
+
+# 11) Relatório Consultivo
+elif "Nuvem de Palavras" in menu:
+    try:
+        from modules.wordcloud_analysis import run_wordcloud
+        st.header("☁️ Nuvem de Palavras das UCs")
+        st.caption("Visualiza os termos mais frequentes nas ementas, objetivos ou competências.")
+        run_wordcloud(df_filtered, scope_key)
+    except Exception as e:
+        st.error(f"Erro na Nuvem de Palavras: {e}")
 
 # ===============================================================
 # 📦 Exportação Global
